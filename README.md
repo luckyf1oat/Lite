@@ -5,44 +5,46 @@
 [![Telegram](https://img.shields.io/badge/Telegram-Lite-26A5E4?logo=telegram&logoColor=white)](https://t.me/komari_lite)
 [![License](https://img.shields.io/github/license/nuomiiiii/lite)](LICENSE)
 
-Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务端提供 Web 管理界面，Agent 负责采集节点状态、执行延迟与回程线路探测，并在管理员授权后提供远程终端、文件管理和任务执行能力。
+Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务端提供 Web 管理界面，Agent 负责采集节点状态、执行延迟与回程线路探测，并在管理员授权后提供远程终端、文件管理和任务执行能力。通过 MCP 代理，还可以让 AI 客户端在指定时间内管理选定的服务器。
 
-本项目基于 [komari-monitor/komari](https://github.com/nuomiiiii/lite) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时补充更完整的流量管理、备份迁移、接入安全与双端后台体验。
+本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：[`2.3.3`](https://github.com/nuomiiiii/lite/releases/tag/2.3.3)**
+**当前正式版：Lite [`2.3.3`](https://github.com/nuomiiiii/Lite/releases/tag/2.3.3) · 配套 Agent [`2.3.3.0`](https://github.com/nuomiiiii/Lite-agent/releases/tag/2.3.3.0) · 默认主题 [`1.1.2`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.1.2)**
 
 > [!IMPORTANT]
-> 从 `2.2.1` 开始，系统 Web UI 与公开大屏主题已经解耦：Lite Web 只负责管理后台、远程终端等系统页面，主题只影响公开大屏。默认和保底主题都是 [Lite-Theme](https://github.com/nuomiiiii/Lite-theme)，可独立更新，并在已有其他可用主题时删除；主题管理始终要求至少保留一个可用主题。原经典主题已拆分为独立的 [komari-Classic](https://github.com/nuomiiiii/lite-Classic)，不再随 Lite 内置。从 Nezha / 旧默认主题升级时会迁到 Lite-Theme。
+> 系统 Web UI 与公开大屏主题独立：Lite Web 负责管理后台、远程终端等系统页面，主题只影响公开大屏。默认和保底主题都是 [Lite-Theme](https://github.com/nuomiiiii/Lite-theme)，可独立更新，并在已有其他可用主题时删除；主题管理始终要求至少保留一个可用主题。原经典主题已拆分为独立的 [lite-Classic](https://github.com/nuomiiiii/lite-Classic)，不再随 Lite 内置。从 Nezha / 旧默认主题升级时会迁到 Lite-Theme。
 
-[快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [完整更新日志](https://github.com/nuomiiiii/lite/releases)
+[使用手册](https://nuomiiiii.github.io/Lite-document/) · [快速开始](#快速开始) · [功能概览](#功能概览) · [升级说明](#从旧版本升级) · [Agent](#agent-与远程管理) · [MCP 代理](#mcp-代理与-ai-授权) · [完整更新日志](https://github.com/nuomiiiii/lite/releases)
 
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
 
-## 2.3.2 稳定版能力摘要
+## 2.3.3 稳定版能力摘要
 
-- **产品更名为 Lite**：新安装使用 Lite 程序、数据目录和在线更新清单；管理后台、安装脚本和 Docker 镜像与此对齐。从 Komari、Komari Lite 或 Lite 2.2.x 升级时，会沿用原来的监听端口、站点设置、账号、主题和节点数据。
-- **成本中心**：集中查看服务器资费、到期时间、本月/本年费用、一次性费用、附加费用和剩余价值，支持按币种汇总、筛选和作废冲销。剩余价值只按服务器基础费用估算。
-- **管理后台换新**：登录、侧栏、服务器列表、设置与安装/升级引导使用同一套布局；手机端有专门优化。服务器详情改为独立页面。仪表盘为 12 列网格，摘要卡默认四分之一宽，成本中心等卡片可点进对应页面。
-- **节点安装改为 Lite-agent**：一键安装使用官方脚本和镜像；已在使用的节点可继续上报。
-- **默认公开主题为 Lite-Theme**：保底主题同步更换，从 Nezha / 旧默认主题升级时会迁到 Lite-Theme。
-- **回程线路规则自动更新**：默认从 Lite 仓库拉取 BGP 前缀库。
+- **MCP 代理**：连接 AI 客户端后，选择服务器与授权时长，即可临时开放命令执行、交互终端和文件读写；支持查看操作记录、导出记录与撤销授权。
+- **远程管理体验优化**：远程管理界面与管理后台采用统一的 UI 风格，并优化了会话管理、文件操作及移动端使用体验。
+- **仪表盘流量统计**：新增近 30 天计费流量与日均用量摘要，点击每日计费流量柱形图可查看当天各服务器的上传、下载与计费用量，并搜索、排序。
+- **软路由部署与更新**：Linux 安装脚本同时支持 systemd 和 OpenWrt / iStoreOS 的 procd；符合条件的直装实例可使用后台“立即更新”，并在更新失败时尝试回退。
+- **节点与账单管理**：节点列表支持重置 Token，地区筛选补齐澳门；一次性费用、流量重置和更换 IP 支持录入 `0` 金额，账单按服务器当前名称显示和搜索。
+- **配套组件更新**：Lite-agent `2.3.3.0` 提供 MCP 完整管理能力；默认 Lite-Theme `1.1.2` 包含手机端显示优化，保留丢包率、探测时间范围和带宽等显示设置。
 
 ## 功能概览
 
 | 模块 | 现有能力 |
 | --- | --- |
 | 节点监控 | CPU、内存、磁盘、网络、负载、连接数、运行时间、在线状态与实时流量 |
-| 节点管理 | 分组、备注、标签、国家\地区修正、分页排序、账单、价格、货币、流量额度和重置日，以及 Agent 配置上报、在线下发与结果确认 |
-| 仪表盘配置 | 预制布局、模块开关、拖动排序、1/4、1/3、1/2 或整行宽度、实时与历史独立刷新、会话恢复，以及 Top 5/10/15/20 排行 |
+| 节点管理 | 分组、备注、标签、国家/地区修正、分页排序、重置 Token、账单、价格、货币、流量额度和重置日，以及 Agent 配置上报、在线下发与结果确认 |
+| 仪表盘配置 | 预制布局、模块开关与排序、卡片宽度、实时与历史独立刷新、Top 5/10/15/20 排行，以及近 30 天流量和每日服务器明细 |
+| 成本中心 | 日/月/年费用、资费版本、附加费用、剩余价值、到期提醒、多币种汇总与作废冲销 |
 | 延迟监测 | IPv4/IPv6 目标探测、历史曲线、平均时延、延迟抖动、近 15 分钟丢包排行、任务排序和异常告警 |
-| 回程线路 | 电信、移动、联通线路识别，支持切线与恢复判断、监测记录、通知和仪表盘状态 |
+| 回程线路 | 电信、移动、联通线路识别，切线与恢复判断、BGP 规则自动更新、监测记录与通知，以及需主动开启的 IP 疑似被墙实验功能 |
 | 通知与报告 | 通用通知、离线通知、负载当前告警与单机静默、延迟丢包告警、流量告警，以及日/周/月流量报告；离线、丢包和流量报告支持新服务器默认配置 |
-| 远程管理 | 多标签 Web 终端、文件管理、远程任务执行和 Docker 管理；仅在 Agent 支持并由管理员主动发起时可用 |
+| 远程管理 | 多会话 Web 终端、文件管理、命令剪贴板与远程任务执行；需要同时开启站点和 Agent 本地开关，并完成管理员重新验证 |
+| MCP 代理 | AI 客户端接入、按节点临时授权、命令与文件操作、交互终端、并发限制、操作记录及授权撤销 |
 | 数据与存储 | SQLite 占用明细、运行诊断、历史分层、上游 1.3.1/1.4.x 数据迁移、WAL 维护、手动空间回收、完整备份恢复和仅配置导出 |
 | 接入与安全 | 管理员登录、双因素认证、单点登录、会话管理、API 与 WebSocket Origin 校验、内置 HTTPS、反向代理和 Cloudflare Tunnel |
 | 外观与多端 | 系统 UI 与公开主题独立、主题市场、预览缓存、多语言主题信息、节点与 Ping 任务选择器、最后一个主题保护；电脑端列表、手机端卡片，并适配简体中文、繁体中文、英文、日文和印尼文 |
-| 部署与更新 | Linux 一键安装与受控回退、Docker、Windows/Linux 多架构二进制和在线更新校验 |
+| 部署与更新 | systemd / OpenWrt procd 一键安装与受控回退、Docker、Windows/Linux 多架构二进制和在线更新校验 |
 
 ## 快速开始
 
@@ -60,7 +62,7 @@ OpenWrt / iStoreOS 以 root 登录后（通常没有 bash、sudo 或 curl）：
 wget -O install-lite.sh https://raw.githubusercontent.com/nuomiiiii/lite/main/install-lite.sh && sh install-lite.sh
 ```
 
-安装脚本会按环境选择 systemd 或 procd，并启用后台「立即更新」。官方 Linux 包目前提供 amd64、arm64、386、riscv64 和 loong64。安装完成后访问 `http://<服务器或路由器 IP>:27777`。正式环境可在后台启用内置 HTTPS，也可以使用反向代理或 Cloudflare Tunnel 接入。
+安装脚本会按环境选择 systemd 或 procd；满足运行时检查与回退条件后，可使用后台“立即更新”。官方 Linux 包提供 `amd64`、`arm64`、`386`、`riscv64` 和 `loong64`，软路由也需匹配其中一种架构。安装完成后访问 `http://<服务器或路由器 IP>:27777`。正式环境可在后台启用内置 HTTPS，也可以使用反向代理或 Cloudflare Tunnel 接入。详细步骤见[Linux 脚本安装手册](https://nuomiiiii.github.io/Lite-document/install/linux)。
 
 ### Docker
 
@@ -104,9 +106,20 @@ chmod +x Lite-linux-amd64
 
 ## Agent 与远程管理
 
-Agent 项目与安装说明见 [nuomiiiii/Lite-agent](https://github.com/nuomiiiii/Lite-agent)。建议使用 [Agent Releases](https://github.com/nuomiiiii/Lite-agent/releases/latest) 中的最新稳定版，以获得完整的配置上报、在线下发和结果确认能力；远程终端、文件管理、Docker 管理和任务执行只有在 Agent 支持并由管理员主动发起时才可用。
+Lite `2.3.3` 推荐配套 [Lite-agent `2.3.3.0`](https://github.com/nuomiiiii/Lite-agent/releases/tag/2.3.3.0)。先在后台添加节点，再打开该节点的“节点配置 → 部署指令”，复制完整命令到目标服务器执行。自动发现注册已下线，新安装和 Docker 重建均使用具体节点的部署指令。
 
-远程入口受管理员登录、双因素认证和短时会话限制。所选节点会保留在终端页面地址中，刷新、两步验证、连续打开和多标签页场景下不会串到其他服务器；这项能力不会修改系统 SSH、防火墙或其他远程连接配置。
+远程终端、文件管理和远程执行需要同时开启 Lite“系统设置 → 通用 → 允许远程管理”与 Agent 本地 `--enable-remote-control`，新安装默认关闭。进入远程功能时，已启用两步验证的账号输入当前验证码，未启用时重新输入管理员密码。
+
+在线配置支持采集间隔、流量重置日、网卡、挂载点、内存缓存计入方式与 GPU 监控的保存、下发和结果确认。远程控制开关等安装选项需要更新节点本地启动参数并重启或重新安装 Agent。安装、日志、更新和卸载步骤见[Agent 安装与维护](https://nuomiiiii.github.io/Lite-document/install/agent)，操作方式见[远程终端与文件](https://nuomiiiii.github.io/Lite-document/remote/terminal)。
+
+### MCP 代理与 AI 授权
+
+1. 使用配套 Lite-agent，并开启上述站点和 Agent 远程控制开关，再开启“系统设置 → 通用 → 启用 MCP 代理”。
+2. 进入“远程管理 → MCP 代理”，复制服务地址，例如 `https://monitor.example.com/mcp`，添加到支持浏览器授权的 AI 客户端。
+3. 客户端发起连接后，在 Lite 中选择允许管理的服务器、授权时长与可选备注，输入管理员密码或两步验证码，点击“授权并连接”。
+4. 回到 AI 客户端执行操作；在 Lite 的“授权详情”和“操作记录”中查看状态、导出记录或撤销授权。
+
+MCP 默认关闭，默认授权时长为 30 分钟，最长 24 小时。在授权范围内，AI 以 Agent 运行账户的权限执行命令、使用终端和读写文件，Lite 不会逐次确认。到期或撤销会结束相关访问，已完成的修改不会自动回滚。详细配置与排查见[MCP 代理与 AI 授权手册](https://nuomiiiii.github.io/Lite-document/remote/mcp)。
 
 ## 数据库与升级说明
 
@@ -121,24 +134,28 @@ SQLite 指标库使用紧凑的无损编码和分层保留。压缩不会额外�
 ### 从旧版本升级
 
 > [!IMPORTANT]
-> `2.1.12` 包含指标数据库迁移。升级前请备份完整 `data` 目录；首次启动时不要中断迁移，并等待后台迁移页面明确显示完成。
+> 从旧数据库布局升级时可能需要迁移。升级前请备份完整 `data` 目录；首次启动时不要中断迁移，并等待后台迁移页面明确显示完成。
 
 1. 停止旧 Lite，备份程序和完整 `data` 目录。
 2. 更新程序或容器，并保持原有 `data` 挂载不变。
-3. 打开管理页面查看迁移进度，确认服务正常后再删除备份。
+3. 打开管理页面查看迁移进度，确认节点连接、历史曲线、账单与远程功能正常，并保留备份供回退。
 4. SQLite 产生的空闲页会继续复用；如需立即把空间归还给磁盘，可在业务低峰期手动执行一次“回收空间”。
 
 上游 `1.3.1`、`1.3.2`、`1.4.x` 以及本分支 `2.1.7` 至 `2.1.11` 的 SQLite 指标库会通过同一迁移页面转换为当前格式，原有数据保留周期不会被改回默认值。监控数据固定启用分层降采样，升级时会自动停用旧版低资源模式。
 
+当前服务端只接受 Agent 协议 2。旧协议 Agent 需要升级；旧协议 2 Agent 即使仍能上报，也需要更新到配套版本才能使用 MCP 完整管理。完整步骤与兼容范围见[更新与数据库迁移](https://nuomiiiii.github.io/Lite-document/install/update)。
+
 ## Linux 一键更新与回退
 
-一键更新只面向官方脚本安装、由 systemd 管理且满足运行时检查的 Linux 实例。更新程序会校验版本、构建标识、大小和 SHA-256，备份当前程序及 `data`，并在新进程健康检查失败时恢复旧版本。
+一键更新面向官方脚本安装、由 systemd 或 OpenWrt / iStoreOS procd 管理且满足运行时检查的 Linux 实例。更新程序会校验版本、构建标识、大小和 SHA-256，备份当前程序及完整 `data`，并在新版本启动或健康检查失败时尝试恢复旧程序和更新前数据。
 
-Docker、Windows、非 systemd 环境、外置指标数据库和不满足原子回退条件的部署不会启用该入口。详细限制见 [Linux 一键更新与回退](docs/self-update.md)。
+Docker、Windows、不受支持的服务管理方式、外置指标数据库和不满足原子回退条件的目录布局不会启用该入口。更新前仍应保留完整备份；详细限制见 [Linux 一键更新与回退](docs/self-update.md)。
 
 ## 从源码构建
 
-后端使用 Go `1.25`，前端建议使用 Node.js `20+`：
+后端使用 Go `1.25`，前端构建推荐使用 Node.js `24`，与当前发布流程一致。
+
+以下命令编译服务端；完整网页还需要准备后文所述的系统 UI 与主题资源。
 
 ```bash
 git clone https://github.com/nuomiiiii/Lite.git
