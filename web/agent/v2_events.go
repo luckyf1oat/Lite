@@ -90,14 +90,7 @@ func EnqueueV2Event(uuid, method string, params any) v2.Event {
 		return v2.Event{}
 	}
 	now := time.Now().UTC()
-	ttl := v2EventTTL
-	if method == v2.MethodAgentPing {
-		ttl = v2PingEventTTL
-	} else if method == v2.MethodAgentRoute {
-		ttl = 2 * time.Minute
-	} else if method == v2.MethodAgentRemote {
-		ttl = pendingRemoteEventTTL
-	}
+	ttl := eventTTL(method, params)
 	event := v2.Event{
 		ID:        newV2EventID(),
 		Method:    method,
@@ -122,6 +115,63 @@ func EnqueueV2Event(uuid, method string, params any) v2.Event {
 	handleExpiredV2Events(uuid, expired)
 
 	return event
+}
+
+func eventTTL(method string, params any) time.Duration {
+	ttl := v2EventTTL
+	switch method {
+	case v2.MethodAgentPing:
+		ttl = v2PingEventTTL
+	case v2.MethodAgentRoute:
+		ttl = 2 * time.Minute
+	case v2.MethodAgentRemote:
+		ttl = pendingRemoteEventTTL
+	case v2.MethodAgentMCPExec, v2.MethodAgentMCPFile:
+		if until := mcpParamsDeadline(params); !until.IsZero() {
+			remain := time.Until(until)
+			if remain < time.Second {
+				remain = time.Second
+			}
+			if remain < ttl {
+				ttl = remain
+			}
+		}
+	}
+	return ttl
+}
+
+func mcpParamsDeadline(params any) time.Time {
+	switch typed := params.(type) {
+	case v2.MCPExecParams:
+		return earliestMCPTime(typed.OperationDeadline, typed.ExpiresAt, typed.ExecutionLeaseDeadline)
+	case *v2.MCPExecParams:
+		if typed == nil {
+			return time.Time{}
+		}
+		return earliestMCPTime(typed.OperationDeadline, typed.ExpiresAt, typed.ExecutionLeaseDeadline)
+	case v2.MCPFileParams:
+		return earliestMCPTime(typed.OperationDeadline, typed.ExpiresAt, typed.ExecutionLeaseDeadline)
+	case *v2.MCPFileParams:
+		if typed == nil {
+			return time.Time{}
+		}
+		return earliestMCPTime(typed.OperationDeadline, typed.ExpiresAt, typed.ExecutionLeaseDeadline)
+	default:
+		return time.Time{}
+	}
+}
+
+func earliestMCPTime(values ...time.Time) time.Time {
+	var earliest time.Time
+	for _, value := range values {
+		if value.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || value.Before(earliest) {
+			earliest = value
+		}
+	}
+	return earliest
 }
 
 func newV2EventID() string {
@@ -221,14 +271,17 @@ func handleExpiredV2Events(uuid string, events []v2.Event) {
 		return
 	}
 	for _, event := range events {
+		if event.Method != v2.MethodAgentExec && event.Method != v2.MethodAgentMCPExec && event.Method != v2.MethodAgentMCPFile {
+			continue
+		}
+		taskID := ExecTaskID(event)
 		if event.Method != v2.MethodAgentExec {
+			taskID = MCPTaskID(event)
+		}
+		if taskID == "" {
 			continue
 		}
-		var params v2.ExecParams
-		if err := bindV2EventParams(event.Params, &params); err != nil || params.TaskID == "" {
-			continue
-		}
-		expiredV2ExecHandler(uuid, params.TaskID)
+		expiredV2ExecHandler(uuid, taskID)
 	}
 }
 
@@ -294,6 +347,51 @@ func ExecTaskID(event v2.Event) string {
 		return ""
 	}
 	return params.TaskID
+}
+
+func MCPTaskID(event v2.Event) string {
+	var exec v2.MCPExecParams
+	if err := bindV2EventParams(event.Params, &exec); err == nil {
+		if exec.TaskID != "" {
+			return exec.TaskID
+		}
+		return exec.OperationID
+	}
+	var file v2.MCPFileParams
+	if err := bindV2EventParams(event.Params, &file); err != nil {
+		return ""
+	}
+	if file.TaskID != "" {
+		return file.TaskID
+	}
+	return file.OperationID
+}
+
+func RemoveV2EventsByTaskID(uuid, taskID string) {
+	if uuid == "" || taskID == "" {
+		return
+	}
+	v2EventMu.Lock()
+	defer v2EventMu.Unlock()
+	q := v2EventQueues[uuid]
+	if q == nil {
+		return
+	}
+	filtered := q.events[:0]
+	for _, event := range q.events {
+		id := ""
+		switch event.Method {
+		case v2.MethodAgentExec:
+			id = ExecTaskID(event)
+		case v2.MethodAgentMCPExec, v2.MethodAgentMCPFile:
+			id = MCPTaskID(event)
+		}
+		if id == taskID {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	q.events = filtered
 }
 
 func RemoveV2EventsByMethods(uuid string, methods ...string) {

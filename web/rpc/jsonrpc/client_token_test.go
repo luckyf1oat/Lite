@@ -147,6 +147,8 @@ func TestAdminGetClientOmitsTokenFromHandlerResult(t *testing.T) {
 
 func TestAdminListClientsOmitsTokenFromHandlerResult(t *testing.T) {
 	original := sampleThemeClient(false, "db-secret")
+	original.MCPFull = true
+	original.MCPFullVersion = 1
 	previousList := listAdminClients
 	t.Cleanup(func() { listAdminClients = previousList })
 	listAdminClients = func() ([]models.Client, error) {
@@ -173,5 +175,8 @@ func TestAdminListClientsOmitsTokenFromHandlerResult(t *testing.T) {
 	}
 	if _, exists := list[0]["token"]; exists {
 		t.Fatalf("adminListClients JSON still has token: %s", raw)
+	}
+	if list[0]["mcp_full"] != true {
+		t.Fatalf("admin list must keep mcp_full: %s", raw)
 	}
 }

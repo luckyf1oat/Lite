@@ -20,7 +20,22 @@ const (
 )
 
 func init() {
-	accounts.OnUserSecurityChanged = RevokeUser
+	accounts.AddUserSecurityListener(RevokeUser)
+}
+
+var (
+	afterRevokeAll   func()
+	afterRevokeLogin func(loginSession string)
+)
+
+// AddRevokeAllListener runs after human remote grants are cleared globally.
+func AddRevokeAllListener(fn func()) {
+	afterRevokeAll = fn
+}
+
+// AddRevokeLoginListener runs after grants for one login session are cleared.
+func AddRevokeLoginListener(fn func(loginSession string)) {
+	afterRevokeLogin = fn
 }
 
 var (
@@ -158,6 +173,9 @@ func RevokeLogin(loginSession string) {
 	if CloseLoginSessions != nil {
 		CloseLoginSessions(loginSession)
 	}
+	if afterRevokeLogin != nil {
+		afterRevokeLogin(loginSession)
+	}
 }
 
 func RevokeUser(userUUID string) {
@@ -182,6 +200,9 @@ func RevokeAll() {
 	grantMu.Unlock()
 	if CloseAllSessions != nil {
 		CloseAllSessions()
+	}
+	if afterRevokeAll != nil {
+		afterRevokeAll()
 	}
 }
 

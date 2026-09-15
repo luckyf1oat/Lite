@@ -31,6 +31,8 @@ func TestGetClientsByUUIDsQueryCountAndMissing(t *testing.T) {
 					Token:                fmt.Sprintf("token-%s-%04d", test.name, i),
 					RemoteProtocol:       2,
 					RemoteControlEnabled: true,
+					MCPFull:              true,
+					MCPFullVersion:       1,
 				})
 				uuids = append(uuids, uuid)
 			}
@@ -58,6 +60,8 @@ func TestGetClientsByUUIDsQueryCountAndMissing(t *testing.T) {
 			require.Equal(t, test.queries, queries)
 			require.Equal(t, 2, found[uuids[0]].RemoteProtocol)
 			require.True(t, found[uuids[0]].RemoteControlEnabled)
+			require.True(t, found[uuids[0]].MCPFull)
+			require.Equal(t, 1, found[uuids[0]].MCPFullVersion)
 		})
 	}
 }

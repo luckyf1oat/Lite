@@ -38,6 +38,7 @@ func TestDeploymentProfileRuntimeConfigExcludesInstallationOnlyFields(t *testing
 	payload := string(encoded)
 	for _, forbidden := range []string{
 		"enable_remote_control",
+		"enable_mcp",
 		"disable_web_ssh",
 		"disable_auto_update",
 		"ignore_unsafe_cert",

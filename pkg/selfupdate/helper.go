@@ -44,7 +44,7 @@ func RunHelper(configPath string) error {
 	if config.StartDelay > 0 {
 		time.Sleep(config.StartDelay)
 	}
-	tx := transaction{config: config, systemctl: runSystemctl, waitHealthy: waitForHealthy}
+	tx := transaction{config: config, systemctl: runServiceCommand, waitHealthy: waitForHealthy}
 	err = tx.run()
 	if err == nil {
 		_ = os.RemoveAll(filepath.Dir(configPath))
@@ -236,6 +236,33 @@ func (tx transaction) failWithoutSwap(result UpdateResult, err error) error {
 
 func (tx transaction) writeResult(result UpdateResult) {
 	_ = atomicWriteJSON(filepath.Join(tx.config.UpdateRoot, lastResultName), result, 0600)
+}
+
+func runServiceCommand(arguments ...string) error {
+	if detectServiceManager() == managerProcd {
+		return runProcdService(arguments...)
+	}
+	return runSystemctl(arguments...)
+}
+
+func runProcdService(arguments ...string) error {
+	if len(arguments) < 2 {
+		return errors.New("procd service command requires an action and service name")
+	}
+	action, name := arguments[0], arguments[1]
+	switch action {
+	case "stop", "start", "restart":
+	default:
+		return fmt.Errorf("unsupported procd service action %q", action)
+	}
+	script := "/etc/init.d/" + serviceBaseName(name)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, script, action).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func runSystemctl(arguments ...string) error {

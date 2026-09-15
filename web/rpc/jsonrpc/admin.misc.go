@@ -17,7 +17,8 @@ import (
 	"github.com/nuomiiiii/lite/pkg/config"
 	"github.com/nuomiiiii/lite/pkg/rpc"
 	v2 "github.com/nuomiiiii/lite/protocol/v2"
-	agent "github.com/nuomiiiii/lite/web/agent"
+	agent 	"github.com/nuomiiiii/lite/web/agent"
+	"github.com/nuomiiiii/lite/web/mcp"
 	"github.com/nuomiiiii/lite/web/remotectl"
 )
 
@@ -182,6 +183,7 @@ func adminEditSettings(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 	delete(cfg, config.AutoDiscoveryKeyKey)
 
 	previousRemote, _ := config.GetAs[bool](config.AllowRemoteManagementKey, false)
+	previousMCP, _ := config.GetAs[bool](config.AllowMCPKey, false)
 
 	touchedMetric := metricKeysTouched(cfg)
 	if touchedMetric {
@@ -216,11 +218,22 @@ func adminEditSettings(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 	if raw, ok := cfg[config.AllowRemoteManagementKey]; ok && previousRemote && !toBool(raw, false) {
 		removed := agent.DrainRemoteDelivery(func() []agent.RemovedV2Event {
 			remotectl.RevokeAll()
-			return agent.RemoveAllV2EventsByMethods(v2.MethodAgentRemote, v2.MethodAgentExec)
+			return agent.RemoveAllV2EventsByMethods(
+				v2.MethodAgentRemote,
+				v2.MethodAgentExec,
+				v2.MethodAgentMCPExec,
+				v2.MethodAgentMCPFile,
+				v2.MethodAgentMCPCancel,
+				v2.MethodAgentMCPRenew,
+				v2.MethodAgentMCPRevoke,
+			)
 		})
 		if err := cancelUndeliveredRemoteExec(removed); err != nil {
 			return nil, rpc.MakeError(rpc.InternalError, "远程管理已关闭，但未能写入已取消任务结果: "+err.Error(), nil)
 		}
+	}
+	if raw, ok := cfg[config.AllowMCPKey]; ok && previousMCP && !toBool(raw, false) {
+		mcp.DrainMCPDelivery()
 	}
 	// 配置已落库，热重载 metric store（无需重启）。连接已在上面验证过，
 	// 这里再次失败属异常情况，回报给用户。

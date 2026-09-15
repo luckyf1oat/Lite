@@ -3,6 +3,7 @@ package accounts
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,9 +12,38 @@ import (
 	"gorm.io/gorm"
 )
 
-// OnUserSecurityChanged closes remote grants and sessions after password or
-// 2FA changes. remotectl registers this to avoid an import cycle.
+// OnUserSecurityChanged is kept for older callers. Prefer AddUserSecurityListener
+// so human remote grants and MCP leases can both subscribe.
 var OnUserSecurityChanged func(userUUID string)
+
+var (
+	userSecurityMu        sync.Mutex
+	userSecurityListeners []func(string)
+)
+
+// AddUserSecurityListener registers a password/2FA change handler. Listeners
+// run in registration order; a later module cannot replace an earlier one.
+func AddUserSecurityListener(fn func(string)) {
+	if fn == nil {
+		return
+	}
+	userSecurityMu.Lock()
+	userSecurityListeners = append(userSecurityListeners, fn)
+	userSecurityMu.Unlock()
+}
+
+func notifyUserSecurityChanged(uuid string) {
+	userSecurityMu.Lock()
+	listeners := append([]func(string){}, userSecurityListeners...)
+	legacy := OnUserSecurityChanged
+	userSecurityMu.Unlock()
+	for _, fn := range listeners {
+		fn(uuid)
+	}
+	if legacy != nil {
+		legacy(uuid)
+	}
+}
 
 var allowedPreferenceLanguages = map[string]struct{}{
 	"en-US": {},
@@ -214,9 +244,7 @@ func UpdateUser(uuid string, name, password, sso_type *string) error {
 	}
 	if password != nil {
 		DeleteAllSessions()
-		if OnUserSecurityChanged != nil {
-			OnUserSecurityChanged(uuid)
-		}
+		notifyUserSecurityChanged(uuid)
 	}
 	return nil
 }

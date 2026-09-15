@@ -322,6 +322,54 @@ func TestSweepExpiredExecEventsPersistDeliveryTimeout(t *testing.T) {
 	}
 }
 
+func TestRemoveV2EventsByTaskIDDropsMatchingMCPExec(t *testing.T) {
+	v2EventMu.Lock()
+	original := v2EventQueues
+	v2EventQueues = make(map[string]*v2EventQueue)
+	v2EventMu.Unlock()
+	t.Cleanup(func() {
+		v2EventMu.Lock()
+		v2EventQueues = original
+		v2EventMu.Unlock()
+	})
+
+	keep := EnqueueV2Event("node-mcp", v2.MethodAgentMCPExec, v2.MCPExecParams{TaskID: "op_keep", Command: "true"})
+	drop := EnqueueV2Event("node-mcp", v2.MethodAgentMCPExec, v2.MCPExecParams{TaskID: "op_drop", Command: "true"})
+	if keep.ID == "" || drop.ID == "" {
+		t.Fatal("mcp exec events were not queued")
+	}
+	RemoveV2EventsByTaskID("node-mcp", "op_drop")
+	events := TakeV2Events("node-mcp", nil, 8)
+	if len(events) != 1 || MCPTaskID(events[0]) != "op_keep" {
+		t.Fatalf("queued after remove = %#v", events)
+	}
+}
+
+func TestEnqueueMCPEventTTLFollowsOperationDeadline(t *testing.T) {
+	v2EventMu.Lock()
+	original := v2EventQueues
+	v2EventQueues = make(map[string]*v2EventQueue)
+	v2EventMu.Unlock()
+	t.Cleanup(func() {
+		v2EventMu.Lock()
+		v2EventQueues = original
+		v2EventMu.Unlock()
+	})
+
+	deadline := time.Now().UTC().Add(2 * time.Second)
+	event := EnqueueV2Event("node-ttl", v2.MethodAgentMCPFile, v2.MCPFileParams{
+		TaskID:            "op_ttl",
+		OperationDeadline: deadline,
+	})
+	if event.ID == "" {
+		t.Fatal("mcp file event was not queued")
+	}
+	ttl := event.ExpiresAt.Sub(event.CreatedAt)
+	if ttl < time.Second || ttl > 3*time.Second {
+		t.Fatalf("mcp event ttl = %s, want around 2s", ttl)
+	}
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

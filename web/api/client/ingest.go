@@ -10,6 +10,7 @@ import (
 	"github.com/nuomiiiii/lite/database/tasks"
 	v2 "github.com/nuomiiiii/lite/protocol/v2"
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
+	"github.com/nuomiiiii/lite/web/mcp"
 )
 
 // ingest.go
@@ -43,6 +44,21 @@ func ingestBasicInfo(uuid string, info map[string]interface{}, fallbackIP string
 	return saveClientBasicInfo(info, uuid, fallbackIP)
 }
 
+func ingestMCPCapability(uuid string, params v2.PullParams) {
+	full := false
+	for _, capability := range params.Capabilities {
+		if capability == v2.CapabilityMCPFull {
+			full = true
+			break
+		}
+	}
+	version := 0
+	if full && params.CapabilityVersions != nil {
+		version = params.CapabilityVersions[v2.CapabilityMCPFull]
+	}
+	clients.SetMCPCapability(uuid, full, version)
+}
+
 // ingestPingResult 保存一条 ping 探测结果。
 func ingestPingResult(uuid string, taskID uint, value int) error {
 	return tasks.SavePingRecord(models.PingRecord{
@@ -58,5 +74,10 @@ func ingestTaskResult(uuid string, params v2.TaskResultParams) error {
 	if finishedAt.IsZero() {
 		finishedAt = time.Now().UTC()
 	}
-	return tasks.SaveIncomingTaskResult(params.TaskID, uuid, params.Result, params.Status, params.ExitCode, finishedAt)
+	completed := mcp.CompleteOperation(params.TaskID, uuid, params)
+	err := tasks.SaveIncomingTaskResult(params.TaskID, uuid, params.Result, params.Status, params.ExitCode, finishedAt)
+	if err == nil || completed {
+		return nil
+	}
+	return err
 }

@@ -50,9 +50,7 @@ func Enable2Fa(uuid, secret, code string) error {
 	}).Error; err != nil {
 		return err
 	}
-	if OnUserSecurityChanged != nil {
-		OnUserSecurityChanged(uuid)
-	}
+	notifyUserSecurityChanged(uuid)
 	return nil
 }
 
@@ -86,8 +84,6 @@ func Disable2Fa(uuid string) error {
 	if err != nil {
 		return err
 	}
-	if OnUserSecurityChanged != nil {
-		OnUserSecurityChanged(uuid)
-	}
+	notifyUserSecurityChanged(uuid)
 	return nil
 }

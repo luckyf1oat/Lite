@@ -109,7 +109,7 @@ func TestNormalizeDashboardSettingsUnlocksCostCenterForLegacySummaries(t *testin
 		LayoutColumns: dashboardGridColumns,
 	}, false)
 	require.NoError(t, err)
-	ids := make([]string, 0, 5)
+	ids := make([]string, 0, 6)
 	for _, module := range normalized.Modules {
 		if module.Enabled {
 			ids = append(ids, module.ID)
@@ -124,6 +124,34 @@ func TestNormalizeDashboardSettingsUnlocksCostCenterForLegacySummaries(t *testin
 	}, ids[:5])
 	assert.Equal(t, 4, normalized.Modules[0].Span)
 	assert.True(t, normalized.Modules[4].Enabled)
+}
+
+func TestNormalizeDashboardSettingsInsertsTraffic30dSummary(t *testing.T) {
+	normalized, err := normalizeDashboardSettings(dashboardSettings{
+		Preset: dashboardPresetCustom,
+		Modules: []dashboardModuleSetting{
+			{ID: dashboardModuleServerStatus, Enabled: true, Span: 3},
+			{ID: dashboardModuleTrafficSummary, Enabled: true, Span: 3},
+			{ID: dashboardModuleStorageSummary, Enabled: true, Span: 3},
+		},
+		RefreshSeconds: 30, ChartRefreshSeconds: 30, RankingLimit: 5,
+		LayoutColumns: dashboardGridColumns,
+	}, true)
+	require.NoError(t, err)
+	trafficIndex := -1
+	summaryIndex := -1
+	for i, module := range normalized.Modules {
+		if module.ID == dashboardModuleTrafficSummary {
+			trafficIndex = i
+		}
+		if module.ID == dashboardModuleTraffic30dSummary {
+			summaryIndex = i
+			assert.False(t, module.Enabled)
+			assert.Equal(t, 3, module.Span)
+		}
+	}
+	require.GreaterOrEqual(t, trafficIndex, 0)
+	assert.Equal(t, trafficIndex+1, summaryIndex)
 }
 
 func TestNormalizeDashboardSettingsRejectsUnsafeIntervals(t *testing.T) {

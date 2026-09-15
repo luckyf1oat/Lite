@@ -16,6 +16,9 @@ const (
 	PrincipalUser
 	// PrincipalAPIKey 通过 API Key 认证的调用方
 	PrincipalAPIKey
+	// PrincipalMCPDelegation is a temporary MCP lease. It must never carry
+	// RoleAdmin or RoleClient; tools are authorized only by the lease itself.
+	PrincipalMCPDelegation
 )
 
 // Principal 调用主体,携带身份信息和能力。
@@ -26,12 +29,15 @@ type Principal struct {
 	UserUUID string
 	// ClientUUID agent 客户端 UUID(PrincipalAgent 时存在)
 	ClientUUID string
+	// LeaseID identifies an MCP delegation (PrincipalMCPDelegation only).
+	LeaseID string
 	// IsAPIKey 是否为 API Key 调用(快速判定,等价于 Type==PrincipalAPIKey)
 	IsAPIKey bool
 	// Roles 角色/能力集。默认由 Type 推导:
 	//   - PrincipalAnonymous → [RoleGuest]
 	//   - PrincipalAgent → [RoleClient]
 	//   - PrincipalUser / PrincipalAPIKey → [RoleAdmin]
+	//   - PrincipalMCPDelegation → [] (no admin/client role)
 	// 未来可扩展为多角色(只读 admin / API Key scope 等)。
 	Roles []string
 }
@@ -68,6 +74,15 @@ func NewAPIKeyPrincipal() *Principal {
 		Type:     PrincipalAPIKey,
 		IsAPIKey: true,
 		Roles:    []string{RoleAdmin},
+	}
+}
+
+// NewMCPDelegationPrincipal creates a lease-scoped MCP caller without admin.
+func NewMCPDelegationPrincipal(leaseID string) *Principal {
+	return &Principal{
+		Type:    PrincipalMCPDelegation,
+		LeaseID: leaseID,
+		Roles:   nil,
 	}
 }
 

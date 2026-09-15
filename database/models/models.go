@@ -45,6 +45,8 @@ type Client struct {
 	RemoteProtocol         int        `json:"remote_protocol" gorm:"default:0"`
 	RemoteControlEnabled   bool       `json:"remote_control_enabled" gorm:"default:false"`
 	RemoteControlProtected bool       `json:"-" gorm:"column:remote_control_protected;default:false"`
+	MCPFull                bool       `json:"mcp_full" gorm:"column:mcp_full;default:false"`
+	MCPFullVersion         int        `json:"mcp_full_version" gorm:"column:mcp_full_version;default:0"`
 	TrafficLimit           int64      `json:"traffic_limit" gorm:"type:bigint"`
 	TrafficLimitType       string     `json:"traffic_limit_type" gorm:"type:varchar(10);default:'sum'"` // 流量阈值类型：sum max min up down
 	TrafficResetDay        *int       `json:"traffic_reset_day,omitempty" gorm:"type:int"`              // nil: follow agent; 0: disabled; 1-31: monthly reset day
@@ -170,3 +172,88 @@ func (sa *StringArray) Scan(value interface{}) error {
 func (sa StringArray) Value() (driver.Value, error) {
 	return json.Marshal(sa)
 }
+
+type MCPLease struct {
+	ID                     string     `json:"id" gorm:"type:varchar(64);primaryKey"`
+	OwnerUserUUID          string     `json:"owner_user_uuid" gorm:"type:varchar(36);index;not null"`
+	OwnerLoginSessionHash  string     `json:"-" gorm:"type:varchar(64);index;not null"`
+	OAuthClientID          string     `json:"oauth_client_id" gorm:"type:varchar(128);index;not null"`
+	AuthorizationRequestID string     `json:"authorization_request_id" gorm:"type:varchar(64)"`
+	TokenFamilyID          string     `json:"token_family_id" gorm:"type:varchar(64);index;not null"`
+	TargetUUIDs            string     `json:"target_uuids" gorm:"type:text;not null"`
+	Mode                   string     `json:"mode" gorm:"type:varchar(16);not null;default:'full'"`
+	Note                   string     `json:"note" gorm:"type:varchar(200)"`
+	MaxConcurrency         int        `json:"max_concurrency" gorm:"not null;default:4"`
+	Status                 string     `json:"status" gorm:"type:varchar(24);index;not null"`
+	PolicyVersion          int        `json:"policy_version" gorm:"not null;default:1"`
+	RevocationReason       string     `json:"revocation_reason" gorm:"type:varchar(64)"`
+	CreatedAt              time.Time  `json:"created_at"`
+	ExpiresAt              time.Time  `json:"expires_at" gorm:"index"`
+	RevokedAt              *time.Time `json:"revoked_at"`
+}
+
+func (MCPLease) TableName() string { return "mcp_leases" }
+
+type MCPToken struct {
+	Hash                 string    `json:"-" gorm:"type:varchar(64);primaryKey"`
+	Kind                 string    `json:"kind" gorm:"type:varchar(16);index;not null"`
+	FamilyID             string    `json:"family_id" gorm:"type:varchar(64);index;not null"`
+	LeaseID              string    `json:"lease_id" gorm:"type:varchar(64);index"`
+	ClientID             string    `json:"client_id" gorm:"type:varchar(128);index;not null"`
+	RedirectURI          string    `json:"redirect_uri" gorm:"type:varchar(512)"`
+	CodeChallenge        string    `json:"-" gorm:"type:varchar(128)"`
+	CodeChallengeMethod  string    `json:"-" gorm:"type:varchar(16)"`
+	Resource             string    `json:"resource" gorm:"type:varchar(512)"`
+	Used                 bool      `json:"used" gorm:"default:false"`
+	ExpiresAt            time.Time `json:"expires_at" gorm:"index"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
+func (MCPToken) TableName() string { return "mcp_tokens" }
+
+type MCPClient struct {
+	ClientID                string    `json:"client_id" gorm:"type:varchar(128);primaryKey"`
+	ClientName              string    `json:"client_name" gorm:"type:varchar(120)"`
+	RedirectURIs            string    `json:"redirect_uris" gorm:"type:text"`
+	TokenEndpointAuthMethod string    `json:"token_endpoint_auth_method" gorm:"type:varchar(64);not null;default:'none'"`
+	CreatedAt               time.Time `json:"created_at"`
+}
+
+func (MCPClient) TableName() string { return "mcp_clients" }
+
+type MCPAuthorizationRequest struct {
+	ID                  string    `json:"id" gorm:"type:varchar(64);primaryKey"`
+	ClientID            string    `json:"client_id" gorm:"type:varchar(128);index;not null"`
+	RedirectURI         string    `json:"redirect_uri" gorm:"type:varchar(512);not null"`
+	State               string    `json:"state" gorm:"type:varchar(256)"`
+	CodeChallenge       string    `json:"-" gorm:"type:varchar(128);not null"`
+	CodeChallengeMethod string    `json:"-" gorm:"type:varchar(16);not null"`
+	Resource            string    `json:"resource" gorm:"type:varchar(512)"`
+	Scope               string    `json:"scope" gorm:"type:varchar(64)"`
+	OwnerUserUUID       string    `json:"owner_user_uuid" gorm:"type:varchar(36);index"`
+	Status              string    `json:"status" gorm:"type:varchar(24);index;not null"`
+	CreatedAt           time.Time `json:"created_at"`
+	ExpiresAt           time.Time `json:"expires_at"`
+}
+
+func (MCPAuthorizationRequest) TableName() string { return "mcp_authorization_requests" }
+
+type MCPOperation struct {
+	ID              string     `json:"id" gorm:"type:varchar(64);primaryKey"`
+	LeaseID         string     `json:"lease_id" gorm:"type:varchar(64);index;not null"`
+	AgentUUID       string     `json:"agent_uuid" gorm:"type:varchar(36);index;not null"`
+	ToolName        string     `json:"tool_name" gorm:"type:varchar(64);not null"`
+	ClientRequestID string     `json:"client_request_id" gorm:"type:varchar(128)"`
+	IdempotencyKey  string     `json:"idempotency_key" gorm:"type:varchar(128);index"`
+	RequestDigest   string     `json:"request_digest" gorm:"type:varchar(64)"`
+	State           string     `json:"state" gorm:"type:varchar(24);index;not null"`
+	ExitCode        int        `json:"exit_code"`
+	Output          string     `json:"-" gorm:"type:longtext"`
+	Truncated       bool       `json:"truncated" gorm:"default:false"`
+	Deadline        time.Time  `json:"deadline"`
+	StartedAt       *time.Time `json:"started_at"`
+	FinishedAt      *time.Time `json:"finished_at"`
+	CreatedAt       time.Time  `json:"created_at"`
+}
+
+func (MCPOperation) TableName() string { return "mcp_operations" }

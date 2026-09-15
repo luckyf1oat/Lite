@@ -7,6 +7,7 @@ import (
 	logger "github.com/nuomiiiii/lite/utils/log"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nuomiiiii/lite/database/billing"
@@ -321,6 +322,11 @@ func saveClientInfoWithAutoOrder(db *gorm.DB, update map[string]interface{}, aut
 			update["remote_protocol"] = int(numericValue)
 		}
 	}
+	if value, exists := update["mcp_full_version"]; exists {
+		if numericValue, ok := toFloat64(value); ok {
+			update["mcp_full_version"] = int(numericValue)
+		}
+	}
 
 	detectedRegion, _ := update["region"].(string)
 	detectedRegion = strings.TrimSpace(detectedRegion)
@@ -546,7 +552,13 @@ func getClientsByUUIDs(db *gorm.DB, uuids []string) (map[string]models.Client, e
 			end = len(unique)
 		}
 		var rows []models.Client
-		err := db.Select("uuid", "remote_protocol", "remote_control_enabled").
+		err := db.Select(
+			"uuid",
+			"remote_protocol",
+			"remote_control_enabled",
+			"mcp_full",
+			"mcp_full_version",
+		).
 			Where("uuid IN ?", unique[i:end]).
 			Find(&rows).Error
 		if err != nil {
@@ -968,4 +980,41 @@ func AdoptTrafficResetDay(clientUUID string, value interface{}) error {
 	return db.Model(&models.Client{}).
 		Where("uuid = ? AND traffic_reset_day IS NULL", clientUUID).
 		Update("traffic_reset_day", *day).Error
+}
+
+var (
+	mcpCapabilityMu   sync.Mutex
+	mcpCapabilitySeen = map[string][2]int{}
+)
+
+// SetMCPCapability stores Agent-advertised MCP support. Pull is frequent, so
+// unchanged values are not written again.
+func SetMCPCapability(uuid string, full bool, version int) {
+	uuid = strings.TrimSpace(uuid)
+	if uuid == "" {
+		return
+	}
+	if !full {
+		version = 0
+	}
+	flag := 0
+	if full {
+		flag = 1
+	}
+	next := [2]int{flag, version}
+	mcpCapabilityMu.Lock()
+	prev, exists := mcpCapabilitySeen[uuid]
+	if exists && prev == next {
+		mcpCapabilityMu.Unlock()
+		return
+	}
+	mcpCapabilitySeen[uuid] = next
+	mcpCapabilityMu.Unlock()
+
+	if err := dbcore.GetDBInstance().Model(&models.Client{}).Where("uuid = ?", uuid).Updates(map[string]any{
+		"mcp_full":         full,
+		"mcp_full_version": version,
+	}).Error; err != nil {
+		logger.Errorf("mcp", "failed to record MCP capability for %s: %v", uuid, err)
+	}
 }

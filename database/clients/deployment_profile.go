@@ -417,7 +417,7 @@ func normalizeProfileText(field, value string, maxLength int) (string, error) {
 	return value, nil
 }
 
-// RuntimeConfig intentionally contains none of the seven installation-only
+// RuntimeConfig intentionally contains none of the installation-only
 // options retained by DeploymentProfile.
 func (profile DeploymentProfile) RuntimeConfig() v2.ConfigParams {
 	interval := defaultReportInterval

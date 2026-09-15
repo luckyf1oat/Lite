@@ -40,6 +40,11 @@ type remoteSession struct {
 	StartedAt     time.Time
 	LastActivity  time.Time
 	closed        bool
+	mcp           bool
+	leaseID       string
+	mcpOut        []byte
+	mcpBase       int
+	mcpClosed     bool
 }
 
 var (
@@ -69,14 +74,14 @@ func (session *remoteSession) attachBrowser(ticket string, connection *websocket
 func (session *remoteSession) canAttachAgent(clientUUID, ticket string, now time.Time) bool {
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	return !session.closed && session.UUID == clientUUID && session.Browser != nil &&
+	return !session.closed && session.UUID == clientUUID && (session.Browser != nil || session.mcp) &&
 		session.Agent == nil && now.Before(session.ExpiresAt) && ticketsEqual(session.AgentTicket, ticket)
 }
 
 func (session *remoteSession) attachAgent(clientUUID, ticket string, connection *websocket.Conn, now time.Time) bool {
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	valid := !session.closed && session.UUID == clientUUID && session.Browser != nil &&
+	valid := !session.closed && session.UUID == clientUUID && (session.Browser != nil || session.mcp) &&
 		session.Agent == nil && now.Before(session.ExpiresAt) && ticketsEqual(session.AgentTicket, ticket)
 	if valid {
 		session.AgentTicket = ""
@@ -104,6 +109,9 @@ func (session *remoteSession) stale(now time.Time) bool {
 func (session *remoteSession) isStaleLocked(now time.Time) bool {
 	if session.closed {
 		return true
+	}
+	if session.mcp {
+		return !now.Before(session.ExpiresAt)
 	}
 	if session.StartedAt.IsZero() {
 		return !now.Before(session.ExpiresAt)
@@ -260,6 +268,31 @@ func CloseUserSessions(userUUID string) {
 
 func CloseAllRemoteSessions() {
 	closeMatching(func(*remoteSession) bool { return true })
+}
+
+func CloseMCPLeaseSessions(leaseID string) {
+	if leaseID == "" {
+		return
+	}
+	closeMatching(func(session *remoteSession) bool {
+		return session.mcp && session.leaseID == leaseID
+	})
+}
+
+func CountMCPLeaseSessions(leaseID string) int {
+	if leaseID == "" {
+		return 0
+	}
+	sessionsMu.RLock()
+	defer sessionsMu.RUnlock()
+	count := 0
+	now := time.Now()
+	for _, session := range sessions {
+		if session != nil && session.mcp && session.leaseID == leaseID && !session.stale(now) {
+			count++
+		}
+	}
+	return count
 }
 
 func closeMatching(match func(*remoteSession) bool) {

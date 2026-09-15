@@ -197,3 +197,8 @@ func isApiKeyValid(apiKey string) bool {
 	}
 	return apiKey == "Bearer "+apiKeyConfig
 }
+
+// IsSiteAPIKey reports whether Authorization is the site-wide API key.
+func IsSiteAPIKey(authorization string) bool {
+	return isApiKeyValid(strings.TrimSpace(authorization))
+}

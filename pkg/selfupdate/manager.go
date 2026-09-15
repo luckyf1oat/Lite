@@ -155,7 +155,7 @@ func PrepareAndLaunch(ctx context.Context, version, versionHash string) (*Update
 		return nil, err
 	}
 
-	output, err := scheduleUpdateHelper(ctx, jobID, candidate, configPath, runCombinedOutput)
+	output, err := launchUpdateHelper(ctx, jobID, candidate, configPath, runCombinedOutput)
 	if err != nil {
 		result.Status = "failed"
 		result.Message = strings.TrimSpace(string(output))
@@ -171,6 +171,23 @@ type commandRunner func(context.Context, string, ...string) ([]byte, error)
 
 func runCombinedOutput(ctx context.Context, name string, arguments ...string) ([]byte, error) {
 	return exec.CommandContext(ctx, name, arguments...).CombinedOutput()
+}
+
+func launchUpdateHelper(ctx context.Context, jobID, candidate, configPath string, run commandRunner) ([]byte, error) {
+	if detectServiceManager() == managerProcd {
+		return scheduleDetachedHelper(ctx, candidate, configPath, run)
+	}
+	return scheduleUpdateHelper(ctx, jobID, candidate, configPath, run)
+}
+
+func scheduleDetachedHelper(ctx context.Context, candidate, configPath string, run commandRunner) ([]byte, error) {
+	if _, err := lookupPath("start-stop-daemon"); err == nil {
+		return run(ctx, "start-stop-daemon", "-S", "-b", "-x", candidate, "--", "_self-update-helper", configPath)
+	}
+	if _, err := lookupPath("setsid"); err == nil {
+		return run(ctx, "sh", "-c", `nohup setsid "$1" _self-update-helper "$2" >/dev/null 2>&1 </dev/null &`, "lite-self-update", candidate, configPath)
+	}
+	return run(ctx, "sh", "-c", `nohup "$1" _self-update-helper "$2" >/dev/null 2>&1 </dev/null &`, "lite-self-update", candidate, configPath)
 }
 
 func scheduleUpdateHelper(ctx context.Context, jobID, candidate, configPath string, run commandRunner) ([]byte, error) {

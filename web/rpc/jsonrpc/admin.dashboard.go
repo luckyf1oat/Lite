@@ -49,6 +49,10 @@ type dashboardTrafficHour struct {
 type dashboardTrafficRankItem struct {
 	UUID      string `json:"uuid"`
 	Name      string `json:"name"`
+	IPv4      string `json:"ipv4,omitempty"`
+	IPv6      string `json:"ipv6,omitempty"`
+	Group     string `json:"group,omitempty"`
+	Tags      string `json:"tags,omitempty"`
 	Up        int64  `json:"up"`
 	Down      int64  `json:"down"`
 	Billable  int64  `json:"billable"`
@@ -56,14 +60,27 @@ type dashboardTrafficRankItem struct {
 }
 
 type dashboardTrafficSummary struct {
-	TodayUp       int64                      `json:"today_up"`
-	TodayDown     int64                      `json:"today_down"`
-	TodayBillable int64                      `json:"today_billable"`
-	Hourly        []dashboardTrafficHour     `json:"hourly"`
-	Daily         []dashboardTrafficDay      `json:"daily"`
-	Ranking       []dashboardTrafficRankItem `json:"ranking"`
-	HistoryReady  bool                       `json:"history_ready"`
-	Error         string                     `json:"error,omitempty"`
+	TodayUp              int64                      `json:"today_up"`
+	TodayDown            int64                      `json:"today_down"`
+	TodayBillable        int64                      `json:"today_billable"`
+	PeriodUp             int64                      `json:"period_up"`
+	PeriodDown           int64                      `json:"period_down"`
+	PeriodBillable       int64                      `json:"period_billable"`
+	PeriodDays           int                        `json:"period_days"`
+	DailyAverageUp       int64                      `json:"daily_average_up"`
+	DailyAverageDown     int64                      `json:"daily_average_down"`
+	DailyAverageBillable int64                      `json:"daily_average_billable"`
+	Hourly               []dashboardTrafficHour     `json:"hourly"`
+	Daily                []dashboardTrafficDay      `json:"daily"`
+	Ranking              []dashboardTrafficRankItem `json:"ranking"`
+	HistoryReady         bool                       `json:"history_ready"`
+	Error                string                     `json:"error,omitempty"`
+}
+
+type dashboardTrafficDayResponse struct {
+	Day         string                     `json:"day"`
+	Items       []dashboardTrafficRankItem `json:"items"`
+	GeneratedAt time.Time                  `json:"generated_at"`
 }
 
 type dashboardStorageSummary struct {
@@ -154,6 +171,11 @@ func init() {
 		Name:    "admin:getClientTrafficDaily",
 		Summary: "Get one client's dashboard daily traffic ledger",
 		Returns: "ClientTrafficDaily",
+	})
+	RegisterWithGroupAndMeta("getDashboardTrafficDay", rpc.RoleAdmin, adminGetDashboardTrafficDay, &rpc.MethodMeta{
+		Name:    "admin:getDashboardTrafficDay",
+		Summary: "List per-server traffic for one dashboard day",
+		Returns: "DashboardTrafficDay",
 	})
 }
 
@@ -570,28 +592,32 @@ func summarizeDashboardTraffic(clientList []models.Client, rows []models.Traffic
 
 	todayKey := today.Format(time.DateOnly)
 	todayDay := daysByKey[todayKey]
+	todayItems := make([]dashboardTrafficRankItem, 0, len(clientList))
 	for _, client := range clientList {
 		adjustment := adjustments[client.UUID+"\x00"+todayKey]
 		usage := trafficledger.ApplyAdjustment(todayUsage[client.UUID], adjustment)
-		todayDay.Up += usage.Up
-		todayDay.Down += usage.Down
+		if todayDay != nil {
+			todayDay.Up += usage.Up
+			todayDay.Down += usage.Down
+		}
 		billable := int64(0)
 		if client.Price > 0 {
 			billable = trafficledger.BillableUsage(client.TrafficLimitType, usage.Up, usage.Down)
 		}
-		todayDay.Billable += billable
+		if todayDay != nil {
+			todayDay.Billable += billable
+		}
 		summary.TodayUp += usage.Up
 		summary.TodayDown += usage.Down
 		summary.TodayBillable += billable
-		name := strings.TrimSpace(client.Name)
-		if name == "" {
-			name = client.UUID
-		}
 		rankingBillable := trafficledger.BillableUsage(client.TrafficLimitType, usage.Up, usage.Down)
+		item := dashboardTrafficRankBase(client)
+		item.Up = usage.Up
+		item.Down = usage.Down
+		item.Billable = rankingBillable
+		todayItems = append(todayItems, item)
 		if rankingBillable > 0 {
-			summary.Ranking = dashboardTopTraffic(summary.Ranking, dashboardTrafficRankItem{
-				UUID: client.UUID, Name: name, Up: usage.Up, Down: usage.Down, Billable: rankingBillable,
-			}, rankingLimit)
+			summary.Ranking = dashboardTopTraffic(summary.Ranking, item, rankingLimit)
 		}
 		for _, hourly := range trafficledger.ApplyHourlyAdjustment(todayHourly[client.UUID], adjustment, now) {
 			hour := hourly.Hour.In(trafficledger.BeijingLocation).Hour()
@@ -608,6 +634,8 @@ func summarizeDashboardTraffic(clientList []models.Client, rows []models.Traffic
 
 	expectedRows := len(clientList) * (trafficledger.DashboardHistoryDays - 1)
 	summary.HistoryReady = len(seen) == expectedRows
+	fillDashboardTrafficPeriod(&summary)
+	storeDashboardTodayTraffic(todayKey, todayItems)
 	return summary
 }
 

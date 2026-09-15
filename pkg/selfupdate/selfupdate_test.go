@@ -90,6 +90,7 @@ func TestDeploymentTypeFallsBackToKomariEnv(t *testing.T) {
 }
 
 func TestServiceNamePrefersLiteEnvThenKomariUnit(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "systemd")
 	t.Setenv("LITE_SERVICE_NAME", "lite-custom")
 	t.Setenv("KOMARI_SERVICE_NAME", "komari")
 	if got := serviceName(); got != "lite-custom.service" {
@@ -113,6 +114,142 @@ func TestServiceNamePrefersLiteEnvThenKomariUnit(t *testing.T) {
 	}
 	if got := serviceName(); got != "komari.service" {
 		t.Fatalf("detected serviceName() = %q, want komari.service", got)
+	}
+}
+
+func TestServiceNameKeepsProcdBaseName(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "procd")
+	t.Setenv("LITE_SERVICE_NAME", "lite.service")
+	if got := serviceName(); got != "lite" {
+		t.Fatalf("serviceName() = %q, want lite", got)
+	}
+}
+
+func TestProcdServicePIDReadsPidfile(t *testing.T) {
+	dir := t.TempDir()
+	pidPath := filepath.Join(dir, "lite.pid")
+	if err := os.WriteFile(pidPath, []byte("4321\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := procdPIDFilePaths
+	t.Cleanup(func() { procdPIDFilePaths = previous })
+	procdPIDFilePaths = func(name string) []string {
+		if serviceBaseName(name) != "lite" {
+			t.Fatalf("pid lookup name = %q", name)
+		}
+		return []string{pidPath}
+	}
+	if got := procdServicePID("lite.service"); got != "4321" {
+		t.Fatalf("procdServicePID() = %q, want 4321", got)
+	}
+}
+
+func TestLaunchUpdateHelperUsesDetachedLauncherOnProcd(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "procd")
+	previous := lookupPath
+	t.Cleanup(func() { lookupPath = previous })
+	lookupPath = func(name string) (string, error) {
+		if name == "start-stop-daemon" {
+			return "/sbin/start-stop-daemon", nil
+		}
+		return "", errors.New("not found")
+	}
+
+	var calls [][]string
+	run := func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+		calls = append(calls, append([]string{name}, arguments...))
+		return []byte("ok"), nil
+	}
+	if _, err := launchUpdateHelper(context.Background(), "job", "/tmp/candidate", "/tmp/helper.json", run); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("helper launches = %d, want 1", len(calls))
+	}
+	if calls[0][0] != "start-stop-daemon" {
+		t.Fatalf("command = %v, want start-stop-daemon", calls[0])
+	}
+	if !containsArgument(calls[0], "-b") || !containsArgument(calls[0], "_self-update-helper") {
+		t.Fatalf("detached helper arguments = %v", calls[0])
+	}
+}
+
+func TestLaunchUpdateHelperFallsBackToSetsidOnProcd(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "procd")
+	previous := lookupPath
+	t.Cleanup(func() { lookupPath = previous })
+	lookupPath = func(name string) (string, error) {
+		if name == "setsid" {
+			return "/usr/bin/setsid", nil
+		}
+		return "", errors.New("not found")
+	}
+
+	var command string
+	var arguments []string
+	run := func(_ context.Context, name string, args ...string) ([]byte, error) {
+		command = name
+		arguments = append([]string(nil), args...)
+		return []byte("ok"), nil
+	}
+	if _, err := launchUpdateHelper(context.Background(), "job", "/opt/lite/candidate", "/tmp/helper.json", run); err != nil {
+		t.Fatal(err)
+	}
+	if command != "sh" {
+		t.Fatalf("command = %q, want sh", command)
+	}
+	if !containsArgument(arguments, `nohup setsid "$1" _self-update-helper "$2" >/dev/null 2>&1 </dev/null &`) {
+		t.Fatalf("setsid helper arguments = %v", arguments)
+	}
+}
+
+func TestLaunchUpdateHelperUsesSystemdRunByDefault(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "systemd")
+	run := func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+		if name != "systemd-run" {
+			t.Fatalf("command = %q, want systemd-run", name)
+		}
+		if !containsArgument(arguments, "--unit=lite-self-update-job") {
+			t.Fatalf("systemd-run arguments = %v", arguments)
+		}
+		return []byte("ok"), nil
+	}
+	if _, err := launchUpdateHelper(context.Background(), "job", "/tmp/candidate", "/tmp/helper.json", run); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTwoThreeTwoLinuxInstallsKeepSystemdHelperControl(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "")
+	manager := detectServiceManager()
+	if manager == managerProcd {
+		if _, err := os.Stat("/etc/openwrt_release"); err != nil {
+			if _, err := os.Stat("/etc/openwrt_version"); err != nil {
+				t.Fatal("2.3.2 systemd hosts must not be classified as procd")
+			}
+		}
+		t.Skip("this host is a procd router")
+	}
+	var command string
+	run := func(_ context.Context, name string, arguments ...string) ([]byte, error) {
+		command = name
+		if name != "systemd-run" {
+			t.Fatalf("unset manager launched %q %v, want systemd-run", name, arguments)
+		}
+		return []byte("ok"), nil
+	}
+	if _, err := launchUpdateHelper(context.Background(), "job", "/tmp/candidate", "/tmp/helper.json", run); err != nil {
+		t.Fatal(err)
+	}
+	if command != "systemd-run" {
+		t.Fatalf("command = %q, want systemd-run", command)
+	}
+}
+
+func TestRunProcdServiceRejectsUnknownAction(t *testing.T) {
+	t.Setenv("LITE_SERVICE_MANAGER", "procd")
+	if err := runProcdService("reload", "lite"); err == nil {
+		t.Fatal("runProcdService() accepted an unsupported action")
 	}
 }
 

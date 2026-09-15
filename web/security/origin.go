@@ -45,21 +45,31 @@ func OriginMatchesRequest(origin string, r *http.Request) bool {
 	return false
 }
 
-// RemoteOriginAllowed rejects empty, opaque, and cross-site Origins.
-// Loopback Vite (5273) talking to a loopback Lite process is an explicit
-// local-development exception and does not trust forwarded Host headers.
+// RemoteOriginAllowed rejects opaque and cross-site Origins.
+// Same-origin GET/HEAD from a browser often omit Origin; those are allowed.
+// State-changing methods must present a matching Origin (or a trusted
+// reverse-proxy forwarded host). Loopback Vite (5273) talking to a loopback
+// Lite process is an explicit local-development exception and does not trust
+// forwarded Host headers.
 func RemoteOriginAllowed(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" || strings.EqualFold(origin, "null") {
+	if strings.EqualFold(origin, "null") {
 		return false
+	}
+	if origin == "" {
+		return remoteOriginOptionalMethod(r.Method)
 	}
 	if OriginMatchesRequest(origin, r) {
 		return true
 	}
 	return loopbackDevOrigin(origin, r)
+}
+
+func remoteOriginOptionalMethod(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
 }
 
 func loopbackDevOrigin(origin string, r *http.Request) bool {

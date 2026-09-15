@@ -154,3 +154,18 @@ func TestPresentThemeNodesAppliesTrafficCompatibility(t *testing.T) {
 		t.Fatalf("effective quota missing: %+v", presented[0])
 	}
 }
+
+func TestRPCClientsWithoutMCPOmitCapabilityFields(t *testing.T) {
+	node := sampleThemeClient(false, "secret-token")
+	node.MCPFull = true
+	node.MCPFullVersion = 1
+	keys := jsonObjectKeys(t, rpcClientsWithoutMCP([]models.Client{node})[0])
+	for _, forbidden := range []string{"mcp_full", "mcp_full_version"} {
+		if keys[forbidden] {
+			t.Fatalf("RPC client leaked %q", forbidden)
+		}
+	}
+	if !keys["name"] || !keys["uuid"] {
+		t.Fatalf("RPC client missing public fields: %v", keys)
+	}
+}

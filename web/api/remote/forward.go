@@ -9,6 +9,10 @@ import (
 )
 
 func forwardSession(session *remoteSession) {
+	if session.mcp {
+		forwardMCPSession(session)
+		return
+	}
 	session.mu.Lock()
 	browser := session.Browser
 	agent := session.Agent

@@ -8,6 +8,7 @@ import (
 	public_api "github.com/nuomiiiii/lite/web/api/public"
 	"github.com/nuomiiiii/lite/web/api/remote"
 	installweb "github.com/nuomiiiii/lite/web/install"
+	"github.com/nuomiiiii/lite/web/mcp"
 	"github.com/nuomiiiii/lite/web/public"
 	jsonRpc "github.com/nuomiiiii/lite/web/rpc/jsonrpc"
 )
@@ -22,6 +23,7 @@ func Register(r *gin.Engine) {
 	})
 
 	registerPublicRoutes(r)
+	mcp.RegisterPublic(r)
 	registerAgentRoutes(r)
 	registerAdminRoutes(r)
 
@@ -75,6 +77,7 @@ func registerAdminRoutes(r *gin.Engine) {
 	g.GET("/dashboard", jsonRpc.Bind("admin:getDashboard", jsonRpc.WithQuery("sections", "limit"), jsonRpc.WithRaw()))
 	g.GET("/dashboard/charts", jsonRpc.Bind("admin:getDashboardCharts", jsonRpc.WithQuery("sections", "limit"), jsonRpc.WithRaw()))
 	g.GET("/dashboard/alerts", jsonRpc.Bind("admin:getDashboardAlertItems", jsonRpc.WithQuery("kind"), jsonRpc.WithRaw()))
+	g.GET("/dashboard/traffic-day", jsonRpc.Bind("admin:getDashboardTrafficDay", jsonRpc.WithQuery("day"), jsonRpc.WithRaw()))
 	billingGroup := g.Group("/billing")
 	{
 		billingGroup.GET("/overview", jsonRpc.Bind("admin:getBillingOverview", jsonRpc.WithQuery("currency")))
@@ -219,6 +222,8 @@ func registerAdminRoutes(r *gin.Engine) {
 	}
 
 	g.GET("/logs", jsonRpc.Bind("admin:getLogs", jsonRpc.WithQuery("limit", "page")))
+
+	mcp.RegisterAdmin(g)
 
 	// clipboard
 	clipboardGroup := g.Group("/clipboard")

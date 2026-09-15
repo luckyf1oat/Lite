@@ -1034,9 +1034,21 @@ func doInitialize() error {
 		&models.BillingPriceVersion{},
 		&models.BillingFXSnapshot{},
 		&models.BillingEntry{},
+		&models.MCPLease{},
+		&models.MCPToken{},
+		&models.MCPClient{},
+		&models.MCPAuthorizationRequest{},
+		&models.MCPOperation{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
+	}
+	if err := instance.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS ux_mcp_operations_lease_idem
+		ON mcp_operations(lease_id, idempotency_key)
+		WHERE idempotency_key IS NOT NULL AND idempotency_key != ''
+	`).Error; err != nil {
+		return fmt.Errorf("failed to create mcp idempotency index: %w", err)
 	}
 	if err := billing.EnsureInitialPriceVersions(instance, time.Now().UTC()); err != nil {
 		return fmt.Errorf("failed to initialize billing price versions: %w", err)

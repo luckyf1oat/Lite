@@ -126,6 +126,7 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 		if err := bindV2Params(req.Params, &params); err != nil {
 			return v2.Error(req.ID, -32602, "invalid pull params", err.Error())
 		}
+		ingestMCPCapability(uuid, params)
 		refreshPostPresence(uuid)
 		timeout := 0 * time.Second
 		if allowWait {

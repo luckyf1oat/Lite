@@ -41,6 +41,7 @@ import (
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
 	"github.com/nuomiiiii/lite/web/api"
 	installweb "github.com/nuomiiiii/lite/web/install"
+	"github.com/nuomiiiii/lite/web/mcp"
 	"github.com/nuomiiiii/lite/web/oauth"
 	frontendpublic "github.com/nuomiiiii/lite/web/public"
 	"github.com/nuomiiiii/lite/web/remotectl"
@@ -134,6 +135,9 @@ func (a *App) Bootstrap() error {
 	}
 	if err := migrateAllowRemoteManagement(); err != nil {
 		return fmt.Errorf("failed to migrate remote management setting: %w", err)
+	}
+	if err := mcp.InvalidateActiveLeases(); err != nil {
+		logger.Errorf("mcp", "Failed to invalidate leftover MCP leases after restart: %v", err)
 	}
 
 	conf, err := config.GetManyAs[config.Settings]()
@@ -913,6 +917,9 @@ func cleanupScheduledData() {
 
 	auditlog.RemoveOldLogs()
 	accounts.RemoveExpiredSessions()
+	if err := mcp.CleanupHistory(); err != nil {
+		logger.Errorf("server", "Failed to clean MCP history: %v", err)
+	}
 	if err := tasks.CleanupMainlandReachabilityData(); err != nil {
 		logger.Errorf("server", "Failed to clean mainland reachability samples: %v", err)
 	}

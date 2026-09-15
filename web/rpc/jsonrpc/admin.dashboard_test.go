@@ -363,6 +363,16 @@ func TestSummarizeDashboardTrafficExcludesFreeClientsFromBilling(t *testing.T) {
 	if summary.Hourly[2].Up != 100 || summary.Hourly[2].Down != 40 || summary.Hourly[3].Up != 120 || summary.Hourly[3].Down != 120 {
 		t.Fatalf("unexpected cumulative hourly traffic: %#v", summary.Hourly[:4])
 	}
+	if summary.PeriodDays != trafficledger.DashboardHistoryDays {
+		t.Fatalf("period days = %d", summary.PeriodDays)
+	}
+	wantPeriodBillable := int64(30*(trafficledger.DashboardHistoryDays-1) + 140)
+	if summary.PeriodBillable != wantPeriodBillable {
+		t.Fatalf("period billable = %d, want %d", summary.PeriodBillable, wantPeriodBillable)
+	}
+	if summary.DailyAverageBillable != wantPeriodBillable/int64(trafficledger.DashboardHistoryDays) {
+		t.Fatalf("daily average = %d", summary.DailyAverageBillable)
+	}
 }
 
 func TestSummarizeDashboardTrafficMarksMissingHistory(t *testing.T) {
@@ -407,4 +417,45 @@ func TestSummarizeDashboardTrafficUsesCalibratedDailyAndHourlyValues(t *testing.
 	assert.Equal(t, int64(25), summary.TodayBillable)
 	assert.Equal(t, int64(15), summary.Hourly[len(summary.Hourly)-1].Up)
 	assert.Equal(t, int64(10), summary.Hourly[len(summary.Hourly)-1].Down)
+}
+
+func TestDashboardTrafficDayItemsApplyPerServerBilling(t *testing.T) {
+	items := dashboardTrafficDayItems(
+		[]models.Client{
+			{UUID: "paid", Name: "edge", Price: 10, TrafficLimitType: "max", IPv4: "10.0.0.8", Group: "core", Tags: "edge"},
+			{UUID: "free", Name: "lab", Price: 0, TrafficLimitType: "up"},
+		},
+		map[string]trafficledger.Usage{
+			"paid": {Up: 40, Down: 90},
+			"free": {Up: 12, Down: 3},
+		},
+		map[string]trafficledger.SignedUsage{
+			"paid\x00" + "2026-09-01": {Up: 10, Down: -20},
+		},
+		"2026-09-01",
+	)
+	require.Len(t, items, 2)
+	assert.Equal(t, "edge", items[0].Name)
+	assert.Equal(t, int64(50), items[0].Up)
+	assert.Equal(t, int64(70), items[0].Down)
+	assert.Equal(t, int64(70), items[0].Billable)
+	assert.Equal(t, "lab", items[1].Name)
+	assert.Equal(t, int64(12), items[1].Billable)
+	assert.Equal(t, "10.0.0.8", items[0].IPv4)
+	assert.Equal(t, "core", items[0].Group)
+	assert.Equal(t, "edge", items[0].Tags)
+}
+
+func TestParseDashboardTrafficDayRejectsOutsideWindow(t *testing.T) {
+	now := time.Date(2026, 9, 15, 4, 0, 0, 0, time.UTC)
+	_, err := parseDashboardTrafficDay("2026-07-01", now)
+	require.Error(t, err)
+	day, err := parseDashboardTrafficDay("2026-09-15", now)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-09-15", day.Format(time.DateOnly))
+}
+
+func TestDashboardDefaultBillingTrendSpanIsHalfWidth(t *testing.T) {
+	assert.Equal(t, 6, dashboardDefaultModuleSpan(dashboardModuleBillingTrend))
+	assert.Equal(t, 3, dashboardDefaultModuleSpan(dashboardModuleTraffic30dSummary))
 }

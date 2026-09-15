@@ -67,7 +67,7 @@ func publicGetNodesInformation(ctx context.Context, _ *rpc.JsonRpcRequest) (any,
 		j++
 	}
 	clientList = clientList[:j]
-	return clientList, nil
+	return rpcClientsWithoutMCP(clientList), nil
 }
 
 func publicGetPublicSettings(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {

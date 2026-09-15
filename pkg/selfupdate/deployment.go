@@ -22,6 +22,8 @@ const (
 	DeploymentWindows = "windows"
 	DeploymentUnknown = "unknown"
 	defaultService    = "lite.service"
+	managerSystemd    = "systemd"
+	managerProcd      = "procd"
 )
 
 type Capability struct {
@@ -76,20 +78,35 @@ func DetectCapability() Capability {
 		result.Reason = "root_required"
 		return result
 	}
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	manager := detectServiceManager()
+	switch manager {
+	case managerSystemd:
+		if _, err := exec.LookPath("systemctl"); err != nil {
+			result.Reason = "systemd_unavailable"
+			return result
+		}
+		if _, err := exec.LookPath("systemd-run"); err != nil {
+			result.Reason = "systemd_run_unavailable"
+			return result
+		}
+	case managerProcd:
+		if _, err := os.Stat("/etc/init.d/" + serviceBaseName(serviceName())); err != nil {
+			result.Reason = "procd_init_unavailable"
+			return result
+		}
+		if !hasDetachedHelperLauncher() {
+			result.Reason = "helper_launcher_unavailable"
+			return result
+		}
+	default:
 		result.Reason = "systemd_unavailable"
-		return result
-	}
-	if _, err := exec.LookPath("systemd-run"); err != nil {
-		result.Reason = "systemd_run_unavailable"
 		return result
 	}
 
 	service := serviceName()
 	result.Service = service
-	output, err := exec.Command("systemctl", "show", service, "--property=MainPID").Output()
-	mainPID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(output)), "MainPID="))
-	if err != nil || mainPID != strconv.Itoa(os.Getpid()) {
+	mainPID := lookupServicePID(service)
+	if mainPID == "" || mainPID != strconv.Itoa(os.Getpid()) {
 		result.Reason = "service_mismatch"
 		return result
 	}
@@ -215,10 +232,44 @@ func pathWithin(path, parent string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+func detectServiceManager() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("LITE_SERVICE_MANAGER"))) {
+	case managerProcd:
+		return managerProcd
+	case managerSystemd:
+		return managerSystemd
+	}
+	// systemd-run helpers do not inherit lite.service env. Treat a live
+	// systemd host as systemd so 2.3.2 Linux installs keep using systemctl.
+	if _, err := os.Stat("/run/systemd/system"); err == nil {
+		return managerSystemd
+	}
+	if _, err := os.Stat("/etc/openwrt_release"); err == nil {
+		return managerProcd
+	}
+	if _, err := os.Stat("/etc/openwrt_version"); err == nil {
+		return managerProcd
+	}
+	if _, err := exec.LookPath("procd"); err == nil {
+		return managerProcd
+	}
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		return managerSystemd
+	}
+	return ""
+}
+
+func serviceBaseName(name string) string {
+	return strings.TrimSuffix(strings.TrimSpace(name), ".service")
+}
+
 func normalizeServiceName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return ""
+	}
+	if detectServiceManager() == managerProcd {
+		return serviceBaseName(name)
 	}
 	if !strings.HasSuffix(name, ".service") {
 		name += ".service"
@@ -231,13 +282,53 @@ func explicitServiceName() string {
 }
 
 var lookupServicePID = serviceMainPID
+var lookupPath = exec.LookPath
+var procdPIDFilePaths = defaultProcdPIDFilePaths
+
+func defaultProcdPIDFilePaths(name string) []string {
+	base := serviceBaseName(name)
+	return []string{
+		"/var/run/" + base + ".pid",
+		"/tmp/run/" + base + ".pid",
+	}
+}
+
+func hasDetachedHelperLauncher() bool {
+	for _, name := range []string{"start-stop-daemon", "setsid", "nohup", "sh"} {
+		if _, err := lookupPath(name); err == nil {
+			return true
+		}
+	}
+	return false
+}
 
 func serviceMainPID(name string) string {
-	output, err := exec.Command("systemctl", "show", name, "--property=MainPID").Output()
+	if detectServiceManager() == managerProcd {
+		return procdServicePID(name)
+	}
+	unit := name
+	if !strings.HasSuffix(unit, ".service") {
+		unit += ".service"
+	}
+	output, err := exec.Command("systemctl", "show", unit, "--property=MainPID").Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(output)), "MainPID="))
+}
+
+func procdServicePID(name string) string {
+	for _, path := range procdPIDFilePaths(name) {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		pid := strings.TrimSpace(string(content))
+		if pid != "" {
+			return pid
+		}
+	}
+	return ""
 }
 
 func serviceName() string {

@@ -15,7 +15,7 @@ func TestRemoteBrowserOriginRejectsEmptyNullAndCrossOrigin(t *testing.T) {
 	}{
 		{name: "same origin", origin: "https://monitor.example", want: true},
 		{name: "opaque origin", origin: "null", want: false},
-		{name: "missing origin", origin: "", want: false},
+		{name: "missing origin", origin: "", want: true},
 		{name: "cross origin", origin: "https://attacker.example", want: false},
 	}
 

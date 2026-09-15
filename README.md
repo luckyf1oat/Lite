@@ -9,7 +9,7 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/nuomiiiii/lite) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时补充更完整的流量管理、备份迁移、接入安全与双端后台体验。
 
-**当前正式版：[`2.3.2`](https://github.com/nuomiiiii/lite/releases/tag/2.3.2)**
+**当前正式版：[`2.3.3`](https://github.com/nuomiiiii/lite/releases/tag/2.3.3)**
 
 > [!IMPORTANT]
 > 从 `2.2.1` 开始，系统 Web UI 与公开大屏主题已经解耦：Lite Web 只负责管理后台、远程终端等系统页面，主题只影响公开大屏。默认和保底主题都是 [Lite-Theme](https://github.com/nuomiiiii/Lite-theme)，可独立更新，并在已有其他可用主题时删除；主题管理始终要求至少保留一个可用主题。原经典主题已拆分为独立的 [komari-Classic](https://github.com/nuomiiiii/lite-Classic)，不再随 Lite 内置。从 Nezha / 旧默认主题升级时会迁到 Lite-Theme。
@@ -48,15 +48,19 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 ### Linux 一键安装
 
-适用于使用 systemd 的常见 Linux 发行版：
+复制一行即可下载并安装。适用于使用 systemd 的常见 Linux 发行版：
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/nuomiiiii/lite/main/install-lite.sh -o install-lite.sh
-chmod +x install-lite.sh
-sudo ./install-lite.sh
+```sh
+curl -fsSL https://raw.githubusercontent.com/nuomiiiii/lite/main/install-lite.sh -o install-lite.sh && sudo sh install-lite.sh
 ```
 
-安装完成后访问 `http://<服务器 IP>:27777`。正式环境可在后台启用内置 HTTPS，也可以使用反向代理或 Cloudflare Tunnel 接入。
+OpenWrt / iStoreOS 以 root 登录后（通常没有 bash、sudo 或 curl）：
+
+```sh
+wget -O install-lite.sh https://raw.githubusercontent.com/nuomiiiii/lite/main/install-lite.sh && sh install-lite.sh
+```
+
+安装脚本会按环境选择 systemd 或 procd，并启用后台「立即更新」。官方 Linux 包目前提供 amd64、arm64、386、riscv64 和 loong64。安装完成后访问 `http://<服务器或路由器 IP>:27777`。正式环境可在后台启用内置 HTTPS，也可以使用反向代理或 Cloudflare Tunnel 接入。
 
 ### Docker
 
@@ -70,7 +74,7 @@ docker run -d \
   ghcr.io/nuomiiiii/lite:latest
 ```
 
-固定使用当前正式版时，将镜像标签改为 `ghcr.io/nuomiiiii/lite:2.3.2`。
+固定使用当前正式版时，将镜像标签改为 `ghcr.io/nuomiiiii/lite:2.3.3`。
 
 更新 Docker 部署前请先备份 `data` 目录，然后拉取新镜像并使用原来的端口和数据挂载重新创建容器：
 

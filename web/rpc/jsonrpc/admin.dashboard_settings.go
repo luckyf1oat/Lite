@@ -22,9 +22,10 @@ const (
 )
 
 const (
-	dashboardModuleServerStatus      = "server_status"
-	dashboardModuleTrafficSummary    = "traffic_summary"
-	dashboardModuleStorageSummary    = "storage_summary"
+	dashboardModuleServerStatus       = "server_status"
+	dashboardModuleTrafficSummary     = "traffic_summary"
+	dashboardModuleTraffic30dSummary  = "traffic_30d_summary"
+	dashboardModuleStorageSummary     = "storage_summary"
 	dashboardModuleCostCenter        = "cost_center"
 	dashboardModuleResourceRanking   = "resource_ranking"
 	dashboardModuleTrafficRanking    = "daily_traffic_ranking"
@@ -42,6 +43,7 @@ const (
 var dashboardModuleOrder = []string{
 	dashboardModuleServerStatus,
 	dashboardModuleTrafficSummary,
+	dashboardModuleTraffic30dSummary,
 	dashboardModuleStorageSummary,
 	dashboardModuleCostCenter,
 	dashboardModuleResourceRanking,
@@ -329,13 +331,17 @@ func normalizeDashboardSettings(input dashboardSettings, strict bool) (dashboard
 			result.Modules = append(result.Modules, module)
 		}
 		_, hadCostCenter := seen[dashboardModuleCostCenter]
+		_, hadTraffic30d := seen[dashboardModuleTraffic30dSummary]
 		for _, id := range dashboardModuleOrder {
 			if _, ok := seen[id]; !ok {
-				if id == dashboardModuleCostCenter {
+				if id == dashboardModuleCostCenter || id == dashboardModuleTraffic30dSummary {
 					continue
 				}
 				result.Modules = append(result.Modules, dashboardModuleSetting{ID: id, Span: dashboardDefaultModuleSpan(id)})
 			}
+		}
+		if !hadTraffic30d {
+			result.Modules = insertTraffic30dAfterTraffic(result.Modules)
 		}
 		if !hadCostCenter {
 			result.Modules = insertCostCenterAfterStorage(result.Modules)
@@ -409,7 +415,7 @@ func migrateDashboardModuleSpan(span, layoutColumns int) int {
 
 func dashboardDefaultModuleSpan(id string) int {
 	switch id {
-	case dashboardModuleServerStatus, dashboardModuleTrafficSummary, dashboardModuleStorageSummary, dashboardModuleCostCenter:
+	case dashboardModuleServerStatus, dashboardModuleTrafficSummary, dashboardModuleTraffic30dSummary, dashboardModuleStorageSummary, dashboardModuleCostCenter:
 		return 3
 	case dashboardModuleResourceRanking, dashboardModuleLatencyTrend:
 		return 12
@@ -465,10 +471,32 @@ func enableNewCostCenterModule(modules []dashboardModuleSetting, newlyInserted b
 	modules[costIndex].Enabled = true
 	for i := range modules {
 		switch modules[i].ID {
-		case dashboardModuleServerStatus, dashboardModuleTrafficSummary, dashboardModuleStorageSummary, dashboardModuleCostCenter:
+		case dashboardModuleServerStatus, dashboardModuleTrafficSummary, dashboardModuleTraffic30dSummary, dashboardModuleStorageSummary, dashboardModuleCostCenter:
 			if modules[i].Span == 3 || modules[i].Span == 4 {
 				modules[i].Span = 3
 			}
 		}
 	}
 }
+
+func insertTraffic30dAfterTraffic(modules []dashboardModuleSetting) []dashboardModuleSetting {
+	for _, module := range modules {
+		if module.ID == dashboardModuleTraffic30dSummary {
+			return modules
+		}
+	}
+	insert := dashboardModuleSetting{ID: dashboardModuleTraffic30dSummary, Span: dashboardDefaultModuleSpan(dashboardModuleTraffic30dSummary)}
+	idx := len(modules)
+	for i, module := range modules {
+		if module.ID == dashboardModuleTrafficSummary {
+			idx = i + 1
+			break
+		}
+	}
+	out := make([]dashboardModuleSetting, 0, len(modules)+1)
+	out = append(out, modules[:idx]...)
+	out = append(out, insert)
+	out = append(out, modules[idx:]...)
+	return out
+}
+

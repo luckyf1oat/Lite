@@ -1,6 +1,7 @@
 package v2
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -12,6 +13,11 @@ const (
 	MethodAgentRouteResult  = "agent.routeResult"
 	MethodAgentTaskResult   = "agent.taskResult"
 	MethodAgentExec         = "agent.exec"
+	MethodAgentMCPExec      = "agent.mcp.exec"
+	MethodAgentMCPCancel    = "agent.mcp.cancel"
+	MethodAgentMCPRenew     = "agent.mcp.renew"
+	MethodAgentMCPRevoke    = "agent.mcp.revoke"
+	MethodAgentMCPFile      = "agent.mcp.file"
 	MethodAgentPing         = "agent.ping"
 	MethodAgentRoute        = "agent.route"
 	MethodAgentMessage      = "agent.message"
@@ -20,6 +26,9 @@ const (
 	MethodAgentConfig       = "agent.config"
 	MethodAgentConfigResult = "agent.configResult"
 	MethodAgentPull         = "agent.pull"
+
+	CapabilityMCPFull = "mcp_full"
+	MCPFullVersion    = 1
 )
 
 type Request struct {
@@ -105,14 +114,53 @@ type RouteResultParams struct {
 }
 
 type PullParams struct {
-	Capabilities []string `json:"capabilities,omitempty"`
-	AckEventIDs  []string `json:"ack_event_ids,omitempty"`
-	LastEventID  string   `json:"last_event_id,omitempty"`
+	Capabilities       []string       `json:"capabilities,omitempty"`
+	CapabilityVersions map[string]int `json:"capability_versions,omitempty"`
+	AckEventIDs        []string       `json:"ack_event_ids,omitempty"`
+	LastEventID        string         `json:"last_event_id,omitempty"`
 }
 
 type ExecParams struct {
 	TaskID  string `json:"task_id"`
 	Command string `json:"command"`
+}
+
+type MCPExecParams struct {
+	TaskID                 string    `json:"task_id"`
+	LeaseID                string    `json:"lease_id"`
+	OperationID            string    `json:"operation_id"`
+	AgentUUID              string    `json:"agent_uuid"`
+	Mode                   string    `json:"mode,omitempty"`
+	Command                string    `json:"command"`
+	Cwd                    string    `json:"cwd,omitempty"`
+	ExpiresAt              time.Time `json:"expires_at"`
+	OperationDeadline      time.Time `json:"operation_deadline"`
+	ExecutionLeaseDeadline time.Time `json:"execution_lease_deadline"`
+	RequestDigest          string    `json:"request_digest,omitempty"`
+}
+
+type MCPCancelParams struct {
+	OperationID string `json:"operation_id"`
+	LeaseID     string `json:"lease_id"`
+}
+
+type MCPRenewParams struct {
+	LeaseID                string    `json:"lease_id"`
+	ExecutionLeaseDeadline time.Time `json:"execution_lease_deadline"`
+}
+
+type MCPRevokeParams struct {
+	LeaseID string `json:"lease_id"`
+}
+
+type MCPFileParams struct {
+	TaskID                 string          `json:"task_id"`
+	LeaseID                string          `json:"lease_id"`
+	OperationID            string          `json:"operation_id"`
+	Request                json.RawMessage `json:"request"`
+	ExpiresAt              time.Time       `json:"expires_at"`
+	OperationDeadline      time.Time       `json:"operation_deadline"`
+	ExecutionLeaseDeadline time.Time       `json:"execution_lease_deadline"`
 }
 
 type PingParams struct {

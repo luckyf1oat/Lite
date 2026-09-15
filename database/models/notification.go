@@ -83,7 +83,7 @@ type TrafficReportNotification struct {
 type TrafficDailyLedger struct {
 	Client     string    `json:"client" gorm:"type:varchar(36);primaryKey;not null"`
 	ClientInfo Client    `json:"-" gorm:"foreignKey:Client;references:UUID;constraint:OnDelete:CASCADE,OnUpdate:CASCADE"`
-	Day        string    `json:"day" gorm:"type:varchar(10);primaryKey;not null"`
+	Day        string    `json:"day" gorm:"type:varchar(10);primaryKey;not null;index:idx_traffic_daily_ledger_day"`
 	UpBytes    int64     `json:"up_bytes" gorm:"type:bigint;not null;default:0"`
 	DownBytes  int64     `json:"down_bytes" gorm:"type:bigint;not null;default:0"`
 	CreatedAt  time.Time `json:"created_at"`
