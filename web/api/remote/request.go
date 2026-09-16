@@ -59,8 +59,8 @@ func CreateSession(c *gin.Context) {
 		api.RespondError(c, http.StatusBadRequest, "Client UUID is required")
 		return
 	}
-	if err := remotectl.ConsumeGrant(request.Grant, principal.UserUUID, loginSession, remotectl.ScopeRemote, request.PageID); err != nil {
-		respondGrantError(c, err)
+	if request.Grant == "" {
+		respondGrantError(c, remotectl.ErrGrantRequired)
 		return
 	}
 	client, err := clients.GetClientByUUID(request.UUID)
@@ -74,6 +74,15 @@ func CreateSession(c *gin.Context) {
 	}
 	if err := ensureRemoteAllowed(client); err != nil {
 		api.RespondError(c, remotePolicyStatus(err), err.Error())
+		return
+	}
+	if err := peekRemoteSessionAdmission(loginSession, request.UUID); err != nil {
+		respondCreateSessionAdmissionError(c, err, "", time.Time{})
+		return
+	}
+	nextGrant, grantExpires, err := remotectl.ConsumeAndRotateGrant(request.Grant, principal.UserUUID, loginSession, remotectl.ScopeRemote, request.PageID)
+	if err != nil {
+		respondGrantError(c, err)
 		return
 	}
 
@@ -91,19 +100,11 @@ func CreateSession(c *gin.Context) {
 		LastActivity:  now,
 	}
 	if session.ID == "" || session.BrowserTicket == "" || session.AgentTicket == "" {
-		api.RespondError(c, http.StatusInternalServerError, "Failed to create secure remote session")
+		respondCreateSessionError(c, http.StatusInternalServerError, "Failed to create secure remote session", nextGrant, grantExpires)
 		return
 	}
 	if err := putSessionUnderDeliveryGate(session); err != nil {
-		if errors.Is(err, errRemoteManagementDisabled) {
-			api.RespondError(c, remotePolicyStatus(err), err.Error())
-			return
-		}
-		if errors.Is(err, errRemoteSessionLimit) || errors.Is(err, errLoginSessionLimit) {
-			api.RespondError(c, http.StatusTooManyRequests, "远程会话数量已满，请关闭不用的终端后重试")
-		} else {
-			api.RespondError(c, http.StatusConflict, err.Error())
-		}
+		respondCreateSessionAdmissionError(c, err, nextGrant, grantExpires)
 		return
 	}
 	auditlog.Log(session.RequesterIP, session.UserUUID, "request remote session, client:"+request.UUID, "terminal")
@@ -119,6 +120,8 @@ func CreateSession(c *gin.Context) {
 		"session_id":     session.ID,
 		"browser_ticket": session.BrowserTicket,
 		"expires_at":     session.ExpiresAt.UTC(),
+		"next_grant":     nextGrant,
+		"grant_expires":  grantExpires.UTC(),
 	})
 }
 
@@ -299,6 +302,31 @@ func putSessionUnderDeliveryGate(session *remoteSession) error {
 
 func noStore(c *gin.Context) {
 	c.Header("Cache-Control", "no-store, private")
+}
+
+func rotatedGrantData(nextGrant string, grantExpires time.Time) gin.H {
+	if nextGrant == "" {
+		return nil
+	}
+	return gin.H{
+		"next_grant":    nextGrant,
+		"grant_expires": grantExpires.UTC(),
+	}
+}
+
+func respondCreateSessionError(c *gin.Context, status int, message, nextGrant string, grantExpires time.Time) {
+	api.Respond(c, status, "error", message, rotatedGrantData(nextGrant, grantExpires))
+}
+
+func respondCreateSessionAdmissionError(c *gin.Context, err error, nextGrant string, grantExpires time.Time) {
+	switch {
+	case errors.Is(err, errRemoteManagementDisabled):
+		respondCreateSessionError(c, remotePolicyStatus(err), err.Error(), nextGrant, grantExpires)
+	case errors.Is(err, errRemoteSessionLimit), errors.Is(err, errLoginSessionLimit):
+		respondCreateSessionError(c, http.StatusTooManyRequests, "远程会话数量已满，请关闭不用的终端后重试", nextGrant, grantExpires)
+	default:
+		respondCreateSessionError(c, http.StatusConflict, err.Error(), nextGrant, grantExpires)
+	}
 }
 
 func respondGrantError(c *gin.Context, err error) {

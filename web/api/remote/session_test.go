@@ -131,6 +131,35 @@ func TestRemoteHeartbeatIsConsumedByServer(t *testing.T) {
 	}
 }
 
+func TestRemoteIdleTimeoutIsThreeMinutes(t *testing.T) {
+	if pendingSessionTTL != 45*time.Second {
+		t.Fatalf("pending session TTL is %s, want 45s", pendingSessionTTL)
+	}
+	if remoteIdleTimeout != 3*time.Minute {
+		t.Fatalf("remote idle timeout is %s, want 3m", remoteIdleTimeout)
+	}
+	if remotePingInterval != 15*time.Second {
+		t.Fatalf("remote ping interval is %s, want 15s", remotePingInterval)
+	}
+	if remoteMaxDuration != 2*time.Hour {
+		t.Fatalf("remote max duration is %s, want 2h", remoteMaxDuration)
+	}
+
+	now := time.Now()
+	session := &remoteSession{
+		ExpiresAt:    now.Add(time.Minute),
+		StartedAt:    now.Add(-time.Minute),
+		LastActivity: now.Add(-46 * time.Second),
+	}
+	if session.stale(now) {
+		t.Fatal("connected session with a recent pong was treated as idle")
+	}
+	session.LastActivity = now.Add(-remoteIdleTimeout - time.Second)
+	if !session.stale(now) {
+		t.Fatal("connected session past idle timeout was kept")
+	}
+}
+
 func TestPruneStaleRemoteSessionsKeepsLiveSessions(t *testing.T) {
 	now := time.Now()
 	replaceRemoteSessions(t, map[string]*remoteSession{
@@ -166,6 +195,50 @@ func TestPutSessionReturnsTypedLimitError(t *testing.T) {
 	err := putSession(&remoteSession{ID: "overflow", ExpiresAt: now.Add(time.Minute), LastActivity: now})
 	if !errors.Is(err, errRemoteSessionLimit) {
 		t.Fatalf("putSession error=%v, want remote session limit", err)
+	}
+}
+
+func TestPeekRemoteSessionAdmissionMatchesPutSessionLimits(t *testing.T) {
+	now := time.Now()
+	full := make(map[string]*remoteSession, maxRemoteSessions)
+	for index := 0; index < maxRemoteSessions; index++ {
+		id := string(rune('a' + index))
+		full[id] = &remoteSession{ID: id, ExpiresAt: now.Add(time.Minute), LastActivity: now}
+	}
+	replaceRemoteSessions(t, full)
+	if err := peekRemoteSessionAdmission("login-a", "node-a"); !errors.Is(err, errRemoteSessionLimit) {
+		t.Fatalf("peek error=%v, want remote session limit", err)
+	}
+
+	replaceRemoteSessions(t, make(map[string]*remoteSession))
+	for index := 0; index < maxRemoteSessionsPerLogin; index++ {
+		id := fmt.Sprintf("login-a-%02d", index)
+		if err := putSession(&remoteSession{
+			ID: id, UUID: "node-a", UserUUID: "user-a", LoginSession: "login-a",
+			ExpiresAt: now.Add(time.Minute), LastActivity: now,
+		}); err != nil {
+			t.Fatalf("login session %s: %v", id, err)
+		}
+	}
+	if err := peekRemoteSessionAdmission("login-a", "node-a"); !errors.Is(err, errLoginSessionLimit) {
+		t.Fatalf("peek error=%v, want per-login limit", err)
+	}
+	if err := peekRemoteSessionAdmission("login-b", "node-a"); err != nil {
+		t.Fatalf("other login should still be admitted: %v", err)
+	}
+}
+
+func TestRotatedGrantDataOmitsEmptyGrant(t *testing.T) {
+	if rotatedGrantData("", time.Now()) != nil {
+		t.Fatal("empty grant must not appear on pre-consume errors")
+	}
+	expires := time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
+	got := rotatedGrantData("next-grant", expires)
+	if got["next_grant"] != "next-grant" {
+		t.Fatalf("next_grant = %v", got["next_grant"])
+	}
+	if !got["grant_expires"].(time.Time).Equal(expires) {
+		t.Fatalf("grant_expires = %v", got["grant_expires"])
 	}
 }
 

@@ -201,6 +201,9 @@ func adminListClients(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonR
 }
 
 func adminGetClientToken(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	if err := denyAPIKey(ctx); err != nil {
+		return nil, err
+	}
 	var params struct {
 		UUID string `json:"uuid"`
 	}
@@ -218,6 +221,9 @@ func adminGetClientToken(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rp
 }
 
 func adminRotateClientToken(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	if err := denyAPIKey(ctx); err != nil {
+		return nil, err
+	}
 	var params struct {
 		UUID string `json:"uuid"`
 	}

@@ -15,7 +15,7 @@ import (
 
 const (
 	pendingSessionTTL         = 45 * time.Second
-	remoteIdleTimeout         = 45 * time.Second
+	remoteIdleTimeout         = 3 * time.Minute
 	remotePingInterval        = 15 * time.Second
 	remoteMaxDuration         = 2 * time.Hour
 	remoteReadLimit           = 2 << 20
@@ -133,6 +133,34 @@ var (
 	sessionsMu sync.RWMutex
 	sessions   = make(map[string]*remoteSession)
 )
+
+func peekRemoteSessionAdmission(loginSession, uuid string) error {
+	if metricstore.EntityWritesBlocked(uuid) {
+		return errors.New("client is being deleted")
+	}
+	loginSession = accounts.SessionLookupKey(loginSession)
+	sessionsMu.Lock()
+	now := time.Now()
+	live := 0
+	loginCount := 0
+	for _, existing := range sessions {
+		if existing == nil || existing.stale(now) {
+			continue
+		}
+		live++
+		if existing.LoginSession == loginSession {
+			loginCount++
+		}
+	}
+	sessionsMu.Unlock()
+	if live >= maxRemoteSessions {
+		return errRemoteSessionLimit
+	}
+	if loginCount >= maxRemoteSessionsPerLogin {
+		return errLoginSessionLimit
+	}
+	return nil
+}
 
 func putSession(session *remoteSession) error {
 	if session != nil {

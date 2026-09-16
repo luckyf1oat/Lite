@@ -145,6 +145,9 @@ func TestAdminEditSettingsCancelsQueuedExecWhenRemoteTurnsOff(t *testing.T) {
 	if !strings.Contains(fn, "未能写入已取消任务结果") {
 		t.Fatal("disabling remote management still swallows cancel persist errors")
 	}
+	if !strings.Contains(fn, "settingsRequireHumanSession") || !strings.Contains(fn, "denyAPIKey") {
+		t.Fatal("custom HTML and theme settings must require a human session")
+	}
 }
 
 func TestPersistExecTerminalResultsDoesNotIgnoreErrors(t *testing.T) {

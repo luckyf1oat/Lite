@@ -102,8 +102,8 @@ func TestTokenAuditLogsOmitSecret(t *testing.T) {
 	if bytes.Contains(source, []byte(`"view client token:"+token`)) || bytes.Contains(source, []byte("view client token:\"+token")) {
 		t.Fatal("view token audit log must not include the secret")
 	}
-	if !bytes.Contains(source, []byte("clients.GetClientTokenByUUID")) {
-		t.Fatal("getClientToken must read the stored token")
+	if !bytes.Contains(source, []byte("denyAPIKey(ctx)")) {
+		t.Fatal("getClientToken must reject API keys")
 	}
 	if bytes.Contains(source, []byte("func adminGetClientToken")) && bytes.Contains(source[bytes.Index(source, []byte("func adminGetClientToken")):bytes.Index(source, []byte("func adminRotateClientToken"))], []byte("CreateClient")) {
 		t.Fatal("getClientToken must not create a token")
@@ -111,6 +111,17 @@ func TestTokenAuditLogsOmitSecret(t *testing.T) {
 	getToken := source[bytes.Index(source, []byte("func adminGetClientToken")):bytes.Index(source, []byte("func adminRotateClientToken"))]
 	if bytes.Contains(getToken, []byte("RotateClientToken")) || bytes.Contains(getToken, []byte("CreateClient")) {
 		t.Fatal("getClientToken must not generate or rotate tokens")
+	}
+}
+
+func TestAdminGetClientTokenRejectsAPIKey(t *testing.T) {
+	ctx := rpc.NewContextWithMeta(context.Background(), &rpc.ContextMeta{
+		Principal:  rpc.NewAPIKeyPrincipal(),
+		Permission: rpc.RoleAdmin,
+	})
+	_, rpcErr := adminGetClientToken(ctx, rpc.NewRequest(1, "admin:getClientToken", map[string]any{"uuid": "node-1"}))
+	if rpcErr == nil || rpcErr.Code != rpc.PermissionDenied {
+		t.Fatalf("API key token read error = %#v", rpcErr)
 	}
 }
 

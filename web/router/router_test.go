@@ -54,11 +54,23 @@ func TestRegisterProtectsClientTokenRoutesWithSensitive2FA(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(source, []byte(`clientGroup.GET("/:uuid/token", api.RequireSensitive2FA(), jsonRpc.Bind("admin:getClientToken"`)) {
-		t.Fatal("GET token must require sensitive 2FA")
+	if !bytes.Contains(source, []byte(`clientGroup.GET("/:uuid/token", api.RejectAPIKey(), api.RequireSensitive2FA(), jsonRpc.Bind("admin:getClientToken"`)) {
+		t.Fatal("GET token must require a human session and sensitive 2FA")
 	}
-	if !bytes.Contains(source, []byte(`clientGroup.POST("/token/rotate", api.RequireSensitive2FA(), jsonRpc.Bind("admin:rotateClientToken")`)) {
-		t.Fatal("rotate token must require sensitive 2FA")
+	if !bytes.Contains(source, []byte(`clientGroup.POST("/token/rotate", api.RejectAPIKey(), api.RequireSensitive2FA(), jsonRpc.Bind("admin:rotateClientToken")`)) {
+		t.Fatal("rotate token must require a human session and sensitive 2FA")
+	}
+	if !bytes.Contains(source, []byte(`theme.Use(api.RejectAPIKey())`)) {
+		t.Fatal("theme APIs must reject API keys")
+	}
+	if !bytes.Contains(source, []byte(`g.GET("/download/backup", api.RejectAPIKey(), admin.DownloadBackup)`)) {
+		t.Fatal("backup download must reject API keys")
+	}
+	if !bytes.Contains(source, []byte(`uploadGroup.Use(api.RejectAPIKey())`)) {
+		t.Fatal("archive upload must reject API keys")
+	}
+	if !bytes.Contains(source, []byte(`g.POST("/update/user", api.RejectAPIKey(), admin.UpdateUser)`)) {
+		t.Fatal("user update must reject API keys")
 	}
 }
 

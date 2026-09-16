@@ -69,6 +69,21 @@ func TestDispatchRemoteRequestAndCreateSessionUseDeliveryGate(t *testing.T) {
 	if !strings.Contains(text, "putSessionUnderDeliveryGate(") {
 		t.Fatal("remote session creation is not on the same gate as disabling remote management")
 	}
+	if !strings.Contains(text, "ConsumeAndRotateGrant(") {
+		t.Fatal("creating a remote session must consume and rotate the grant")
+	}
+	if !strings.Contains(text, `"next_grant"`) {
+		t.Fatal("creating a remote session must return the rotated grant")
+	}
+	if !strings.Contains(text, "peekRemoteSessionAdmission(") {
+		t.Fatal("creating a remote session must check capacity before consuming the grant")
+	}
+	if !strings.Contains(text, "respondCreateSessionAdmissionError(") {
+		t.Fatal("session admission failures after grant rotation must return the rotated grant")
+	}
+	if !strings.Contains(text, "rotatedGrantData(") {
+		t.Fatal("session creation errors after grant rotation must include next_grant")
+	}
 }
 
 func TestAuthorizeAndSessionSetNoStore(t *testing.T) {

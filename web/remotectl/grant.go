@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,7 @@ type storedGrant struct {
 	userUUID     string
 	loginSession string
 	scope        string
+	pageID       string
 	expiresAt    time.Time
 }
 
@@ -73,7 +75,10 @@ func issueGrant(userUUID, loginSession, scope, pageID string, expires time.Time)
 	if scope != ScopeRemote && scope != ScopeExec {
 		return "", time.Time{}, ErrGrantScope
 	}
-	_ = pageID
+	pageID = strings.TrimSpace(pageID)
+	if pageID == "" {
+		return "", time.Time{}, ErrGrantWorkspace
+	}
 	if !expires.After(time.Now()) {
 		return "", time.Time{}, ErrGrantExpired
 	}
@@ -90,6 +95,7 @@ func issueGrant(userUUID, loginSession, scope, pageID string, expires time.Time)
 		userUUID:     userUUID,
 		loginSession: loginSession,
 		scope:        scope,
+		pageID:       pageID,
 		expiresAt:    expires,
 	}
 	grantMu.Unlock()
@@ -97,8 +103,16 @@ func issueGrant(userUUID, loginSession, scope, pageID string, expires time.Time)
 }
 
 func ConsumeGrant(plain, userUUID, loginSession, scope, pageID string) error {
-	_, err := lookupGrant(plain, userUUID, loginSession, scope, pageID, false)
+	_, err := lookupGrant(plain, userUUID, loginSession, scope, pageID, true)
 	return err
+}
+
+func ConsumeAndRotateGrant(plain, userUUID, loginSession, scope, pageID string) (string, time.Time, error) {
+	stored, err := lookupGrant(plain, userUUID, loginSession, scope, pageID, true)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return issueGrant(stored.userUUID, stored.loginSession, stored.scope, stored.pageID, stored.expiresAt)
 }
 
 func TakeExecGrant(plain, userUUID, loginSession, pageID string) (time.Time, error) {
@@ -136,7 +150,9 @@ func lookupGrant(plain, userUUID, loginSession, scope, pageID string, consume bo
 	if stored.scope != scope {
 		return storedGrant{}, ErrGrantScope
 	}
-	_ = pageID
+	if stored.pageID != strings.TrimSpace(pageID) {
+		return storedGrant{}, ErrGrantWorkspace
+	}
 	if !stored.expiresAt.After(now) {
 		delete(grants, key)
 		return storedGrant{}, ErrGrantExpired

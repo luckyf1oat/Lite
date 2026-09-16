@@ -21,9 +21,6 @@ func TestIssueAndLookupGrant(t *testing.T) {
 	if err != nil || plain == "" || !expires.After(time.Now()) {
 		t.Fatalf("IssueGrant() = %q %v %v", plain, expires, err)
 	}
-	if err := ConsumeGrant(plain, "user-a", "login-a", ScopeRemote, "page-a"); err != nil {
-		t.Fatalf("valid grant rejected: %v", err)
-	}
 	if err := ConsumeGrant(plain, "user-b", "login-a", ScopeRemote, "page-a"); !errors.Is(err, ErrGrantPrincipal) {
 		t.Fatalf("cross-user grant error = %v", err)
 	}
@@ -33,19 +30,45 @@ func TestIssueAndLookupGrant(t *testing.T) {
 	if err := ConsumeGrant(plain, "user-a", "login-a", ScopeExec, "page-a"); !errors.Is(err, ErrGrantScope) {
 		t.Fatalf("cross-scope grant error = %v", err)
 	}
-	if err := ConsumeGrant(plain, "user-a", "login-a", ScopeRemote, "page-b"); err != nil {
-		t.Fatalf("grant should not be bound to a page instance: %v", err)
+	if err := ConsumeGrant(plain, "user-a", "login-a", ScopeRemote, "page-b"); !errors.Is(err, ErrGrantWorkspace) {
+		t.Fatalf("cross-page grant error = %v", err)
+	}
+	if err := ConsumeGrant(plain, "user-a", "login-a", ScopeRemote, "page-a"); err != nil {
+		t.Fatalf("valid grant rejected: %v", err)
+	}
+	if err := ConsumeGrant(plain, "user-a", "login-a", ScopeRemote, "page-a"); !errors.Is(err, ErrGrantInvalid) {
+		t.Fatalf("consumed grant error = %v", err)
 	}
 }
 
-func TestIssueRemoteGrantDoesNotRequirePage(t *testing.T) {
+func TestIssueRemoteGrantRequiresPage(t *testing.T) {
 	ResetForTest()
-	plain, _, err := IssueGrant("user-a", "login-a", ScopeRemote, "")
-	if err != nil {
+	if _, _, err := IssueGrant("user-a", "login-a", ScopeRemote, ""); !errors.Is(err, ErrGrantWorkspace) {
 		t.Fatalf("empty page error = %v", err)
 	}
-	if err := ConsumeGrant(plain, "user-a", "login-a", ScopeRemote, "page-b"); err != nil {
-		t.Fatalf("login-scoped grant rejected: %v", err)
+}
+
+func TestConsumeAndRotateGrantKeepsPageAndExpiry(t *testing.T) {
+	ResetForTest()
+	plain, expires, err := IssueGrant("user-a", "login-a", ScopeRemote, "page-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, nextExpires, err := ConsumeAndRotateGrant(plain, "user-a", "login-a", ScopeRemote, "page-a")
+	if err != nil || next == "" || next == plain {
+		t.Fatalf("rotate = %q %v %v", next, nextExpires, err)
+	}
+	if !nextExpires.Equal(expires) {
+		t.Fatalf("rotated expiry = %v, want %v", nextExpires, expires)
+	}
+	if err := ConsumeGrant(plain, "user-a", "login-a", ScopeRemote, "page-a"); !errors.Is(err, ErrGrantInvalid) {
+		t.Fatalf("old grant after rotate error = %v", err)
+	}
+	if _, _, err := ConsumeAndRotateGrant(next, "user-a", "login-a", ScopeRemote, "page-b"); !errors.Is(err, ErrGrantWorkspace) {
+		t.Fatalf("rotated grant on other page error = %v", err)
+	}
+	if err := ConsumeGrant(next, "user-a", "login-a", ScopeRemote, "page-a"); err != nil {
+		t.Fatalf("rotated grant rejected: %v", err)
 	}
 }
 
