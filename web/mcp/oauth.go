@@ -14,7 +14,6 @@ import (
 	"github.com/nuomiiiii/lite/database/models"
 	"github.com/nuomiiiii/lite/web/api"
 	"github.com/nuomiiiii/lite/web/api/remote"
-	"gorm.io/gorm"
 )
 
 var (
@@ -292,6 +291,7 @@ func handleRegister(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
 		return
 	}
+	_ = queueRegisteredClientAuthorization(client, allowed[0], client.CreatedAt)
 	c.JSON(http.StatusCreated, gin.H{
 		"client_id":                  client.ClientID,
 		"client_id_issued_at":        client.CreatedAt.Unix(),
@@ -377,15 +377,42 @@ func handleAuthorize(c *gin.Context) {
 		ExpiresAt:           now.Add(10 * time.Minute),
 	})
 	if err != nil {
+		if errors.Is(err, errAuthorizationDenied) {
+			oauthAuthorizeError(c, redirectURI, query.Get("state"), "access_denied")
+			return
+		}
 		oauthAuthorizeError(c, redirectURI, query.Get("state"), "server_error")
 		return
 	}
 	c.Redirect(http.StatusFound, "/admin/remote-management/mcp?authorize="+url.QueryEscape(req.ID))
 }
 
+func queueRegisteredClientAuthorization(client models.MCPClient, redirectURI string, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	_, err := createAuthorizationRequest(models.MCPAuthorizationRequest{
+		ClientID:            client.ClientID,
+		RedirectURI:         redirectURI,
+		CodeChallengeMethod: pkceS256,
+		Scope:               scopeAgentFull,
+		Status:              statusPending,
+		CreatedAt:           now,
+		ExpiresAt:           now.Add(10 * time.Minute),
+	})
+	return err
+}
+
 func createAuthorizationRequest(req models.MCPAuthorizationRequest) (models.MCPAuthorizationRequest, error) {
 	authorizeMu.Lock()
 	defer authorizeMu.Unlock()
+	denied, err := clientHasDeniedAuthorization(req.ClientID)
+	if err != nil {
+		return models.MCPAuthorizationRequest{}, err
+	}
+	if denied {
+		return models.MCPAuthorizationRequest{}, errAuthorizationDenied
+	}
 	now := req.CreatedAt
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -394,24 +421,46 @@ func createAuthorizationRequest(req models.MCPAuthorizationRequest) (models.MCPA
 	if req.ExpiresAt.IsZero() {
 		req.ExpiresAt = now.Add(10 * time.Minute)
 	}
-	var existing models.MCPAuthorizationRequest
-	err := database().Where(
-		"status = ? AND expires_at > ? AND client_id = ? AND redirect_uri = ? AND state = ? AND code_challenge = ? AND code_challenge_method = ? AND resource = ? AND scope = ?",
-		statusPending,
-		now,
-		req.ClientID,
-		req.RedirectURI,
-		req.State,
-		req.CodeChallenge,
-		req.CodeChallengeMethod,
-		req.Resource,
-		req.Scope,
-	).Order("created_at ASC").First(&existing).Error
-	if err == nil {
-		return existing, nil
-	}
-	if err != gorm.ErrRecordNotFound {
+	var pending []models.MCPAuthorizationRequest
+	if err := database().Where("status = ? AND client_id = ?", statusPending, req.ClientID).
+		Order("created_at ASC").Find(&pending).Error; err != nil {
 		return models.MCPAuthorizationRequest{}, err
+	}
+	for _, existing := range pending {
+		if !existing.ExpiresAt.After(now) {
+			continue
+		}
+		if sameAuthorizationIdentity(existing, req) {
+			return existing, nil
+		}
+	}
+	if strings.TrimSpace(req.CodeChallenge) != "" {
+		for i := range pending {
+			existing := pending[i]
+			if !existing.ExpiresAt.After(now) || strings.TrimSpace(existing.CodeChallenge) != "" {
+				continue
+			}
+			updates := map[string]any{
+				"redirect_uri":          req.RedirectURI,
+				"state":                 req.State,
+				"code_challenge":        req.CodeChallenge,
+				"code_challenge_method": req.CodeChallengeMethod,
+				"resource":              req.Resource,
+				"scope":                 req.Scope,
+				"expires_at":            req.ExpiresAt,
+			}
+			if err := database().Model(&existing).Updates(updates).Error; err != nil {
+				return models.MCPAuthorizationRequest{}, err
+			}
+			existing.RedirectURI = req.RedirectURI
+			existing.State = req.State
+			existing.CodeChallenge = req.CodeChallenge
+			existing.CodeChallengeMethod = req.CodeChallengeMethod
+			existing.Resource = req.Resource
+			existing.Scope = req.Scope
+			existing.ExpiresAt = req.ExpiresAt
+			return existing, nil
+		}
 	}
 	if req.ID == "" {
 		id, err := newID("ar_")
@@ -427,6 +476,35 @@ func createAuthorizationRequest(req models.MCPAuthorizationRequest) (models.MCPA
 		return models.MCPAuthorizationRequest{}, err
 	}
 	return req, nil
+}
+
+func sameAuthorizationIdentity(a, b models.MCPAuthorizationRequest) bool {
+	return a.RedirectURI == b.RedirectURI &&
+		a.State == b.State &&
+		a.CodeChallenge == b.CodeChallenge &&
+		a.CodeChallengeMethod == b.CodeChallengeMethod &&
+		a.Resource == b.Resource &&
+		a.Scope == b.Scope
+}
+
+func authorizationRequestReady(req models.MCPAuthorizationRequest) bool {
+	return strings.TrimSpace(req.CodeChallenge) != ""
+}
+
+var errAuthorizationDenied = errors.New("authorization denied")
+
+func clientHasDeniedAuthorization(clientID string) (bool, error) {
+	clientID = strings.TrimSpace(clientID)
+	if clientID == "" {
+		return false, nil
+	}
+	var count int64
+	if err := database().Model(&models.MCPAuthorizationRequest{}).
+		Where("client_id = ? AND status = ?", clientID, statusDenied).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func oauthAuthorizeError(c *gin.Context, redirectURI, state, code string) {
@@ -687,6 +765,7 @@ func revokeFamily(familyID, reason string) error {
 		}).Error
 		cancelLeaseOperations(lease.ID)
 		remote.CloseMCPLeaseSessions(lease.ID)
+		_ = compactLeaseOperationOutputs(database(), lease.ID)
 	}
 	return database().Model(&models.MCPToken{}).Where("family_id = ?", familyID).Updates(map[string]any{
 		"used":       true,

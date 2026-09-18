@@ -269,6 +269,17 @@ func buildDashboard(ctx context.Context, now time.Time, sections dashboardSummar
 	return result, nil
 }
 
+func dashboardChartNeedsPingTasks(sections dashboardChartSections) bool {
+	return sections&(dashboardChartLatency|dashboardChartLatencyJitter|dashboardChartPacketLoss) != 0
+}
+
+func loadDashboardPingTasks(sections dashboardChartSections) ([]models.PingTask, error) {
+	if !dashboardChartNeedsPingTasks(sections) {
+		return nil, nil
+	}
+	return tasks.GetAllPingTasks()
+}
+
 func buildDashboardCharts(ctx context.Context, now time.Time, sections dashboardChartSections, rankingLimit int) dashboardChartsResponse {
 	result := dashboardChartsResponse{GeneratedAt: now}
 	if sections == 0 {
@@ -291,23 +302,28 @@ func buildDashboardCharts(ctx context.Context, now time.Time, sections dashboard
 		}
 		return result
 	}
+	pingTasks, pingErr := loadDashboardPingTasks(sections)
 	if sections&dashboardChartTraffic != 0 {
 		if result.Traffic, err = loadDashboardTraffic(ctx, clientList, now, rankingLimit); err != nil {
 			result.Traffic = dashboardTrafficSummary{Error: err.Error()}
 		}
 	}
 	if sections&dashboardChartLatency != 0 {
-		if result.Latency, err = loadDashboardLatency(ctx, clientList, now, rankingLimit); err != nil {
+		if result.Latency, err = loadDashboardLatency(ctx, clientList, pingTasks, now, rankingLimit); err != nil {
 			result.Latency.Error = err.Error()
 		}
 	}
 	if sections&dashboardChartLatencyJitter != 0 {
-		if result.Latency.JitterRanking, err = loadDashboardLatencyJitter(ctx, clientList, now, rankingLimit); err != nil {
+		if pingErr != nil {
+			result.Latency.JitterError = pingErr.Error()
+		} else if result.Latency.JitterRanking, err = loadDashboardLatencyJitter(ctx, clientList, pingTasks, now, rankingLimit); err != nil {
 			result.Latency.JitterError = err.Error()
 		}
 	}
 	if sections&dashboardChartPacketLoss != 0 {
-		if result.PacketLoss, err = loadDashboardPacketLoss(ctx, clientList, now, rankingLimit); err != nil {
+		if pingErr != nil {
+			result.PacketLoss = dashboardPacketLossSummary{Error: pingErr.Error()}
+		} else if result.PacketLoss, err = loadDashboardPacketLoss(ctx, clientList, pingTasks, now, rankingLimit); err != nil {
 			result.PacketLoss.Error = err.Error()
 		}
 	}
@@ -362,17 +378,47 @@ func parseDashboardChartRequest(req *rpc.JsonRpcRequest) (dashboardChartSections
 
 func parseDashboardRankingLimit(req *rpc.JsonRpcRequest) int {
 	if rawLimit, ok := rpc.GetParamAs[string](req, "limit"); ok {
-		if parsed, err := strconv.Atoi(rawLimit); err == nil && dashboardRankingLimitAllowed(parsed) {
-			return parsed
+		if parsed, err := strconv.Atoi(rawLimit); err == nil {
+			if parsed == dashboardRankingLimitAll || dashboardRankingLimitAllowed(parsed) {
+				return parsed
+			}
 		}
 	}
 	return 5
 }
 
-func buildDashboardResources(clientList []models.Client, limit int) dashboardResourceSummary {
-	if !dashboardRankingLimitAllowed(limit) {
-		limit = 5
+const dashboardRankingLimitAll = 0
+
+func dashboardNormalizeRankingLimit(limit int) int {
+	if limit == dashboardRankingLimitAll || dashboardRankingLimitAllowed(limit) {
+		return limit
 	}
+	return 5
+}
+
+func dashboardInsertRanked[T any](top []T, item T, limit int, better func(item, current T) bool) []T {
+	limit = dashboardNormalizeRankingLimit(limit)
+	insertAt := len(top)
+	for index, current := range top {
+		if better(item, current) {
+			insertAt = index
+			break
+		}
+	}
+	if limit > 0 && insertAt >= limit {
+		return top
+	}
+	if limit == 0 || len(top) < limit {
+		var zero T
+		top = append(top, zero)
+	}
+	copy(top[insertAt+1:], top[insertAt:len(top)-1])
+	top[insertAt] = item
+	return top
+}
+
+func buildDashboardResources(clientList []models.Client, limit int) dashboardResourceSummary {
+	limit = dashboardNormalizeRankingLimit(limit)
 	reports := agent_runtime.GetLatestReport()
 	items := make([]dashboardResourceRankItem, 0, len(clientList))
 	for _, client := range clientList {
@@ -420,23 +466,15 @@ func dashboardTopResources(
 	limit int,
 	value func(dashboardResourceRankItem) float64,
 ) []dashboardResourceRankItem {
-	top := make([]dashboardResourceRankItem, 0, limit)
+	capacity := limit
+	if capacity <= 0 {
+		capacity = len(items)
+	}
+	top := make([]dashboardResourceRankItem, 0, capacity)
 	for _, item := range items {
-		insertAt := len(top)
-		for index, current := range top {
-			if value(item) > value(current) || (value(item) == value(current) && item.Name < current.Name) {
-				insertAt = index
-				break
-			}
-		}
-		if insertAt >= limit {
-			continue
-		}
-		if len(top) < limit {
-			top = append(top, dashboardResourceRankItem{})
-		}
-		copy(top[insertAt+1:], top[insertAt:len(top)-1])
-		top[insertAt] = item
+		top = dashboardInsertRanked(top, item, limit, func(candidate, current dashboardResourceRankItem) bool {
+			return value(candidate) > value(current) || (value(candidate) == value(current) && candidate.Name < current.Name)
+		})
 	}
 	return top
 }
@@ -640,23 +678,7 @@ func summarizeDashboardTraffic(clientList []models.Client, rows []models.Traffic
 }
 
 func dashboardTopTraffic(top []dashboardTrafficRankItem, item dashboardTrafficRankItem, limit int) []dashboardTrafficRankItem {
-	if !dashboardRankingLimitAllowed(limit) {
-		limit = 5
-	}
-	insertAt := len(top)
-	for index, current := range top {
-		if item.Billable > current.Billable || (item.Billable == current.Billable && item.Name < current.Name) {
-			insertAt = index
-			break
-		}
-	}
-	if insertAt >= limit {
-		return top
-	}
-	if len(top) < limit {
-		top = append(top, dashboardTrafficRankItem{})
-	}
-	copy(top[insertAt+1:], top[insertAt:len(top)-1])
-	top[insertAt] = item
-	return top
+	return dashboardInsertRanked(top, item, limit, func(candidate, current dashboardTrafficRankItem) bool {
+		return candidate.Billable > current.Billable || (candidate.Billable == current.Billable && candidate.Name < current.Name)
+	})
 }

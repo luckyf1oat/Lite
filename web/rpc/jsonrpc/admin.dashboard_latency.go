@@ -10,7 +10,6 @@ import (
 
 	"github.com/nuomiiiii/lite/database/metricstore"
 	"github.com/nuomiiiii/lite/database/models"
-	dbtasks "github.com/nuomiiiii/lite/database/tasks"
 	"github.com/nuomiiiii/lite/pkg/metric"
 )
 
@@ -38,13 +37,15 @@ type dashboardLatencyRankItem struct {
 }
 
 type dashboardLatencyJitterRankItem struct {
-	UUID      string  `json:"uuid"`
-	Name      string  `json:"name"`
-	Previous  float64 `json:"previous"`
-	Current   float64 `json:"current"`
-	Delta     float64 `json:"delta"`
-	TaskID    uint    `json:"task_id,omitempty"`
-	DetailURL string  `json:"detail_url,omitempty"`
+	UUID        string  `json:"uuid"`
+	Name        string  `json:"name"`
+	Previous    float64 `json:"previous"`
+	Current     float64 `json:"current"`
+	Delta       float64 `json:"delta"`
+	TaskID      uint    `json:"task_id,omitempty"`
+	TaskName    string  `json:"task_name,omitempty"`
+	DetailURL   string  `json:"detail_url,omitempty"`
+	clientOrder int     `json:"-"`
 }
 
 type dashboardLatencyBucket struct {
@@ -54,12 +55,8 @@ type dashboardLatencyBucket struct {
 
 const dashboardLatencyJitterLookback = 10 * time.Minute
 
-func loadDashboardLatency(ctx context.Context, clientList []models.Client, now time.Time, rankingLimit int) (dashboardLatencySummary, error) {
-	result := dashboardLatencySummary{}
-	pingTasks, pingTasksErr := dbtasks.GetAllPingTasks()
-	if pingTasksErr == nil {
-		result.Targets = len(pingTasks)
-	}
+func loadDashboardLatency(ctx context.Context, clientList []models.Client, pingTasks []models.PingTask, now time.Time, rankingLimit int) (dashboardLatencySummary, error) {
+	result := dashboardLatencySummary{Targets: len(pingTasks)}
 	store := metricstore.GetStore()
 	if store == nil {
 		return result, fmt.Errorf("metric store is not initialized")
@@ -152,31 +149,18 @@ func loadDashboardLatency(ctx context.Context, clientList []models.Client, now t
 }
 
 func dashboardTopLatency(top []dashboardLatencyRankItem, item dashboardLatencyRankItem, limit int) []dashboardLatencyRankItem {
-	if !dashboardRankingLimitAllowed(limit) {
-		limit = 5
-	}
-	insertAt := len(top)
-	for index, current := range top {
-		if item.Average > current.Average || (item.Average == current.Average && item.Name < current.Name) {
-			insertAt = index
-			break
-		}
-	}
-	if insertAt >= limit {
-		return top
-	}
-	if len(top) < limit {
-		top = append(top, dashboardLatencyRankItem{})
-	}
-	copy(top[insertAt+1:], top[insertAt:len(top)-1])
-	top[insertAt] = item
-	return top
+	return dashboardInsertRanked(top, item, limit, func(candidate, current dashboardLatencyRankItem) bool {
+		return candidate.Average > current.Average || (candidate.Average == current.Average && candidate.Name < current.Name)
+	})
 }
 
-func loadDashboardLatencyJitter(ctx context.Context, clientList []models.Client, now time.Time, rankingLimit int) ([]dashboardLatencyJitterRankItem, error) {
+func loadDashboardLatencyJitter(ctx context.Context, clientList []models.Client, pingTasks []models.PingTask, now time.Time, rankingLimit int) ([]dashboardLatencyJitterRankItem, error) {
 	store := metricstore.GetStore()
 	if store == nil {
 		return nil, fmt.Errorf("metric store is not initialized")
+	}
+	if len(pingTasks) == 0 || len(clientList) == 0 {
+		return []dashboardLatencyJitterRankItem{}, nil
 	}
 	currentMinute := now.UTC().Truncate(time.Minute)
 	series, err := store.DashboardSeries(ctx, metric.AggregateQuery{
@@ -193,38 +177,54 @@ func loadDashboardLatencyJitter(ctx context.Context, clientList []models.Client,
 	if err != nil {
 		return nil, fmt.Errorf("query latency jitter window: %w", err)
 	}
-	pingTasks, _ := dbtasks.GetAllPingTasks()
+	return summarizeDashboardLatencyJitter(clientList, pingTasks, series, currentMinute, rankingLimit), nil
+}
 
-	pointsByClient := make(map[string][]metric.AggregatePoint, len(clientList))
-	nodeTaskIDs := make(map[string]map[uint]struct{}, len(clientList))
-	for _, point := range series {
-		pointsByClient[point.EntityID] = append(pointsByClient[point.EntityID], point)
-		if point.Count > 0 && point.Value >= 0 {
-			if taskID, ok := dashboardLatencyTaskID(point); ok {
-				if nodeTaskIDs[point.EntityID] == nil {
-					nodeTaskIDs[point.EntityID] = make(map[uint]struct{})
-				}
-				nodeTaskIDs[point.EntityID][taskID] = struct{}{}
-			}
-		}
+type dashboardLatencyJitterKey struct {
+	client string
+	taskID uint
+}
+
+func summarizeDashboardLatencyJitter(clientList []models.Client, taskList []models.PingTask, series []metric.AggregatePoint, currentMinute time.Time, rankingLimit int) []dashboardLatencyJitterRankItem {
+	tasksByID := make(map[uint]models.PingTask, len(taskList))
+	for _, task := range taskList {
+		tasksByID[task.Id] = task
 	}
-	result := make([]dashboardLatencyJitterRankItem, 0, rankingLimit)
-	for _, client := range clientList {
-		points := pointsByClient[client.UUID]
-		previous, current, ok := dashboardLatestLatencyMinuteAverages(points, currentMinute)
+	pointsBySeries := make(map[dashboardLatencyJitterKey][]metric.AggregatePoint, len(series))
+	for _, point := range series {
+		taskID, ok := dashboardLatencyTaskID(point)
 		if !ok {
 			continue
 		}
-		name := strings.TrimSpace(client.Name)
-		if name == "" {
-			name = client.UUID
+		if _, ok := tasksByID[taskID]; !ok {
+			continue
 		}
-		result = dashboardTopLatencyJitter(result, dashboardLatencyJitterRankItem{
-			UUID: client.UUID, Name: name, Previous: previous, Current: current, Delta: current - previous,
-			TaskID: dashboardPreferredPingTaskID(client.UUID, nodeTaskIDs[client.UUID], pingTasks),
-		}, rankingLimit)
+		key := dashboardLatencyJitterKey{client: point.EntityID, taskID: taskID}
+		pointsBySeries[key] = append(pointsBySeries[key], point)
 	}
-	return result, nil
+	result := make([]dashboardLatencyJitterRankItem, 0, rankingLimit)
+	for clientOrder, client := range clientList {
+		for _, task := range taskList {
+			if !task.AppliesToClient(client.UUID) {
+				continue
+			}
+			previous, current, ok := dashboardLatestLatencyMinuteAverages(pointsBySeries[dashboardLatencyJitterKey{client: client.UUID, taskID: task.Id}], currentMinute)
+			if !ok {
+				continue
+			}
+			result = dashboardTopLatencyJitter(result, dashboardLatencyJitterRankItem{
+				UUID:        client.UUID,
+				Name:        dashboardNodeName(client),
+				Previous:    previous,
+				Current:     current,
+				Delta:       current - previous,
+				TaskID:      task.Id,
+				TaskName:    dashboardTaskName(task),
+				clientOrder: clientOrder,
+			}, rankingLimit)
+		}
+	}
+	return result
 }
 
 func dashboardLatencyTaskID(point metric.AggregatePoint) (uint, bool) {
@@ -280,24 +280,19 @@ func dashboardLatencyMinuteBuckets(points []metric.AggregatePoint) map[time.Time
 	return buckets
 }
 
+func dashboardLatencyJitterBefore(left, right dashboardLatencyJitterRankItem) bool {
+	if left.Delta != right.Delta {
+		return left.Delta > right.Delta
+	}
+	if left.Name != right.Name {
+		return left.Name < right.Name
+	}
+	if left.TaskName != right.TaskName {
+		return left.TaskName < right.TaskName
+	}
+	return left.clientOrder < right.clientOrder
+}
+
 func dashboardTopLatencyJitter(top []dashboardLatencyJitterRankItem, item dashboardLatencyJitterRankItem, limit int) []dashboardLatencyJitterRankItem {
-	if !dashboardRankingLimitAllowed(limit) {
-		limit = 5
-	}
-	insertAt := len(top)
-	for index, current := range top {
-		if item.Delta > current.Delta || (item.Delta == current.Delta && item.Name < current.Name) {
-			insertAt = index
-			break
-		}
-	}
-	if insertAt >= limit {
-		return top
-	}
-	if len(top) < limit {
-		top = append(top, dashboardLatencyJitterRankItem{})
-	}
-	copy(top[insertAt+1:], top[insertAt:len(top)-1])
-	top[insertAt] = item
-	return top
+	return dashboardInsertRanked(top, item, limit, dashboardLatencyJitterBefore)
 }

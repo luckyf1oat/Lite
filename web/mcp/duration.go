@@ -17,9 +17,10 @@ const (
 	DefaultMaxConcurrency  = 4
 	MaxConcurrencyCap      = 16
 	AccessTokenTTL         = 5 * time.Minute
-	AuthCodeTTL            = 60 * time.Second
+	AuthCodeTTL            = 180 * time.Second
 	DefaultExecTimeout     = 5 * time.Minute
-	MaxOutputCache         = 16 << 20
+	MaxOutputCache         = 1 << 20
+	AdminOutputPreviewMax  = 800
 	DefaultReadBytes       = 64 << 10
 	MaxReadBytes           = 256 << 10
 	PolicyVersion          = 1

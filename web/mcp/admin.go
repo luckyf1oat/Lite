@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -32,6 +33,7 @@ func RegisterAdmin(g gin.IRouter) {
 	g.POST("/mcp/leases/:id/revoke", revokeLease)
 	g.POST("/mcp/leases/revoke-all", revokeAllLeases)
 	g.GET("/mcp/operations", listOperations)
+	g.POST("/mcp/history/purge", purgeHistory)
 }
 
 func requireAdminSession(c *gin.Context) (*rpc.Principal, string, bool) {
@@ -161,18 +163,35 @@ func listAuthorizationRequests(c *gin.Context) {
 	if _, _, ok := requireAdminSession(c); !ok {
 		return
 	}
-	var rows []models.MCPAuthorizationRequest
-	now := time.Now().UTC()
-	if err := database().Where("status = ? AND expires_at > ?", statusPending, now).
-		Order("created_at DESC").Limit(20).Find(&rows).Error; err != nil {
+	rows, err := pendingAuthorizationRequests(time.Now().UTC(), 20)
+	if err != nil {
 		api.RespondError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	items := make([]gin.H, 0, len(rows))
-	for _, req := range uniquePendingAuthorizationRequests(rows) {
+	for _, req := range rows {
 		items = append(items, authorizationRequestJSON(req))
 	}
 	api.RespondSuccess(c, gin.H{"requests": items})
+}
+
+func pendingAuthorizationRequests(now time.Time, limit int) ([]models.MCPAuthorizationRequest, error) {
+	var rows []models.MCPAuthorizationRequest
+	if err := database().Where("status = ?", statusPending).
+		Order("created_at DESC").Limit(100).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	fresh := make([]models.MCPAuthorizationRequest, 0, len(rows))
+	for _, req := range rows {
+		if req.ExpiresAt.After(now) {
+			fresh = append(fresh, req)
+		}
+	}
+	out := uniquePendingAuthorizationRequests(fresh)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func uniquePendingAuthorizationRequests(rows []models.MCPAuthorizationRequest) []models.MCPAuthorizationRequest {
@@ -219,6 +238,7 @@ func authorizationRequestJSON(req models.MCPAuthorizationRequest) gin.H {
 		"redirect_uri": req.RedirectURI,
 		"scope":        req.Scope,
 		"resource":     req.Resource,
+		"ready":        authorizationRequestReady(req),
 		"expires_at":   req.ExpiresAt.UTC(),
 	}
 }
@@ -231,6 +251,10 @@ func approveAuthorization(c *gin.Context) {
 	req, err := loadAuthRequest(c.Param("id"))
 	if err != nil || req.Status != statusPending || !req.ExpiresAt.After(time.Now().UTC()) {
 		api.RespondError(c, http.StatusNotFound, "authorization request not found")
+		return
+	}
+	if !authorizationRequestReady(req) {
+		api.RespondError(c, http.StatusConflict, "authorization request is not ready")
 		return
 	}
 	var body struct {
@@ -336,17 +360,39 @@ func approveAuthorization(c *gin.Context) {
 }
 
 func denyAuthorization(c *gin.Context) {
-	if _, _, ok := requireAdminSession(c); !ok {
+	principal, loginSession, ok := requireAdminSession(c)
+	if !ok {
 		return
 	}
 	req, err := loadAuthRequest(c.Param("id"))
-	if err != nil {
+	if err != nil || req.Status != statusPending || !req.ExpiresAt.After(time.Now().UTC()) {
 		api.RespondError(c, http.StatusNotFound, "authorization request not found")
 		return
 	}
-	_ = database().Model(&req).Update("status", statusDenied).Error
+	now := time.Now().UTC()
+	lease, err := recordDeniedAuthorization(database(), req, principal.UserUUID, accounts.SessionLookupKey(loginSession), now)
+	if err != nil {
+		api.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
 	redirect, _ := urlWithError(req.RedirectURI, "access_denied", req.State)
-	api.RespondSuccess(c, gin.H{"redirect_uri": redirect})
+	auditlog.Log(c.ClientIP(), principal.UserUUID, "denied MCP authorization, lease:"+lease.ID, "warn")
+	api.RespondSuccess(c, gin.H{
+		"lease_id":     lease.ID,
+		"redirect_uri": redirect,
+	})
+}
+
+func purgeHistory(c *gin.Context) {
+	if _, _, ok := requireAdminSession(c); !ok {
+		return
+	}
+	deleted, err := purgeInactiveHistory(database(), time.Now().UTC())
+	if err != nil {
+		api.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	api.RespondSuccess(c, gin.H{"deleted": deleted})
 }
 
 func listLeases(c *gin.Context) {
@@ -433,8 +479,10 @@ func listOperations(c *gin.Context) {
 	if _, _, ok := requireAdminSession(c); !ok {
 		return
 	}
+	maybeCompactOperationOutputs()
 	now := time.Now().UTC()
 	query := database().Model(&models.MCPOperation{}).
+		Select(fmt.Sprintf("id, lease_id, agent_uuid, tool_name, state, exit_code, truncated, substr(output, 1, %d) AS output, created_at, started_at, finished_at", AdminOutputPreviewMax)).
 		Where("created_at >= ?", adminHistoryCutoff(now)).
 		Order("created_at DESC")
 	if leaseID := strings.TrimSpace(c.Query("lease_id")); leaseID != "" {
@@ -455,7 +503,7 @@ func listOperations(c *gin.Context) {
 			"state":       op.State,
 			"exit_code":   op.ExitCode,
 			"truncated":   op.Truncated,
-			"preview":     clipText(op.Output, 800),
+			"preview":     clipText(op.Output, AdminOutputPreviewMax),
 			"created_at":  op.CreatedAt.UTC(),
 			"started_at":  op.StartedAt,
 			"finished_at": op.FinishedAt,

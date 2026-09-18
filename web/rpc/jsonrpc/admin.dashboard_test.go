@@ -127,7 +127,7 @@ func TestDashboardNavigationFollowsThirdPartyThemeManifest(t *testing.T) {
 	})
 	assert.Equal(t, detailURL, charts.Traffic.Ranking[0].DetailURL)
 	assert.Equal(t, detailURL+"?tab=network", charts.Latency.Ranking[0].DetailURL)
-	assert.Equal(t, detailURL+"?tab=network", charts.Latency.JitterRanking[0].DetailURL)
+	assert.Equal(t, detailURL+"?task=6", charts.Latency.JitterRanking[0].DetailURL)
 	assert.Equal(t, detailURL+"?task=7", charts.PacketLoss.Ranking[0].DetailURL)
 
 	summary := decorateDashboardSummaryNavigation(dashboardResponse{Resources: dashboardResourceSummary{
@@ -236,6 +236,35 @@ func TestDashboardLatencyJitterAcceptsSingleSparseSamplePerMinute(t *testing.T) 
 	assert.InDelta(t, 35, latest, 0.001)
 }
 
+func TestSummarizeDashboardLatencyJitterRanksEachTask(t *testing.T) {
+	current := time.Date(2026, 8, 7, 11, 30, 0, 0, time.UTC)
+	clients := []models.Client{
+		{UUID: "node-a", Name: "Alpha"},
+		{UUID: "node-b", Name: "Beta"},
+	}
+	tasks := []models.PingTask{
+		{Id: 1, Name: "Cloudflare", Clients: models.StringArray{"node-a", "node-b"}},
+		{Id: 2, Name: "Google DNS", Clients: models.StringArray{"node-a"}},
+	}
+	ranking := summarizeDashboardLatencyJitter(clients, tasks, []metric.AggregatePoint{
+		{EntityID: "node-a", Bucket: current.Add(-time.Minute), Value: 10, Count: 1, Tags: map[string]string{"task_id": "1"}},
+		{EntityID: "node-a", Bucket: current, Value: 40, Count: 1, Tags: map[string]string{"task_id": "1"}},
+		{EntityID: "node-a", Bucket: current.Add(-time.Minute), Value: 20, Count: 1, Tags: map[string]string{"task_id": "2"}},
+		{EntityID: "node-a", Bucket: current, Value: 22, Count: 1, Tags: map[string]string{"task_id": "2"}},
+		{EntityID: "node-b", Bucket: current.Add(-time.Minute), Value: 30, Count: 1, Tags: map[string]string{"task_id": "1"}},
+		{EntityID: "node-b", Bucket: current, Value: 50, Count: 1, Tags: map[string]string{"task_id": "1"}},
+	}, current, 0)
+	require.Len(t, ranking, 3)
+	assert.Equal(t, "Alpha", ranking[0].Name)
+	assert.Equal(t, "Cloudflare", ranking[0].TaskName)
+	assert.InDelta(t, 30, ranking[0].Delta, 0.001)
+	assert.Equal(t, "Beta", ranking[1].Name)
+	assert.Equal(t, "Cloudflare", ranking[1].TaskName)
+	assert.Equal(t, "Alpha", ranking[2].Name)
+	assert.Equal(t, "Google DNS", ranking[2].TaskName)
+	assert.InDelta(t, 2, ranking[2].Delta, 0.001)
+}
+
 func TestDashboardLatencyRankingsHonorEveryTopLimit(t *testing.T) {
 	for _, limit := range []int{5, 10, 15, 20} {
 		var latency []dashboardLatencyRankItem
@@ -251,7 +280,7 @@ func TestDashboardLatencyRankingsHonorEveryTopLimit(t *testing.T) {
 	}
 }
 
-func TestSummarizeDashboardPacketLossKeepsWorstOnlineTask(t *testing.T) {
+func TestSummarizeDashboardPacketLossKeepsAllOnlineTasks(t *testing.T) {
 	clients := []models.Client{
 		{UUID: "node-a", Name: "Alpha"},
 		{UUID: "node-b", Name: "Beta"},
@@ -277,16 +306,29 @@ func TestSummarizeDashboardPacketLossKeepsWorstOnlineTask(t *testing.T) {
 	online := map[string]struct{}{"node-a": {}, "node-b": {}, "node-d": {}}
 
 	ranking := summarizeDashboardPacketLoss(clients, tasks, points, online, 5)
-	require.Len(t, ranking, 2)
-	assert.Equal(t, []string{"node-a", "node-b"}, []string{ranking[0].UUID, ranking[1].UUID})
-	assert.Equal(t, uint(2), ranking[0].TaskID)
-	assert.Equal(t, 4, ranking[0].Lost)
-	assert.Equal(t, 8, ranking[0].Total)
+	require.Len(t, ranking, 4)
+	assert.Equal(t, []string{"node-a", "node-b", "node-b", "node-a"}, []string{
+		ranking[0].UUID, ranking[1].UUID, ranking[2].UUID, ranking[3].UUID,
+	})
+	assert.Equal(t, []uint{2, 3, 4, 1}, []uint{
+		ranking[0].TaskID, ranking[1].TaskID, ranking[2].TaskID, ranking[3].TaskID,
+	})
 	assert.InDelta(t, 50, ranking[0].LossRate, 0.001)
-	assert.Equal(t, uint(3), ranking[1].TaskID)
-	assert.Equal(t, 3, ranking[1].Lost)
-	assert.Equal(t, 7, ranking[1].Total)
 	assert.InDelta(t, 300.0/7.0, ranking[1].LossRate, 0.001)
+	assert.InDelta(t, 25, ranking[2].LossRate, 0.001)
+	assert.InDelta(t, 12.5, ranking[3].LossRate, 0.001)
+}
+
+func TestDashboardPacketLossUnlimitedKeepsEveryTask(t *testing.T) {
+	var ranking []dashboardPacketLossRankItem
+	for index := 0; index < 25; index++ {
+		ranking = dashboardTopPacketLoss(ranking, dashboardPacketLossRankItem{
+			Name: "node", LossRate: float64(index + 1), clientOrder: index,
+		}, 0)
+	}
+	require.Len(t, ranking, 25)
+	assert.Equal(t, float64(25), ranking[0].LossRate)
+	assert.Equal(t, float64(1), ranking[24].LossRate)
 }
 
 func TestDashboardPacketLossOrdering(t *testing.T) {

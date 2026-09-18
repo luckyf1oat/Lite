@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nuomiiiii/lite/database/accounts"
@@ -40,14 +41,21 @@ const (
 	reasonRevoked      = "revoked"
 	reasonUserSecurity = "user_security"
 
-	adminHistoryRetention = 7 * 24 * time.Hour
-	reasonLoginRevoked    = "login_session"
-	reasonMCPOff          = "mcp_disabled"
-	reasonRemoteOff       = "remote_disabled"
-	reasonRefreshReuse    = "refresh_reuse"
+	adminHistoryRetention    = 3 * 24 * time.Hour
+	operationOutputRetention = 15 * time.Minute
+	outputCompactMinInterval = time.Minute
+	reasonLoginRevoked       = "login_session"
+	reasonMCPOff             = "mcp_disabled"
+	reasonRemoteOff          = "remote_disabled"
+	reasonRefreshReuse       = "refresh_reuse"
 )
 
-var database = dbcore.GetDBInstance
+var (
+	database = dbcore.GetDBInstance
+
+	outputCompactMu   sync.Mutex
+	lastOutputCompact time.Time
+)
 
 func init() {
 	accounts.AddUserSecurityListener(RevokeUser)
@@ -106,6 +114,7 @@ func revokeActiveLeases(userUUID, loginHash, reason string) error {
 	}).Error; err != nil {
 		return err
 	}
+	_ = compactLeaseOperationOutputs(db, ids...)
 	return db.Model(&models.MCPToken{}).Where("family_id IN ?", families).Updates(map[string]any{
 		"used":       true,
 		"expires_at": now,
@@ -145,6 +154,7 @@ func loadLiveLease(id string, now time.Time) (models.MCPLease, error) {
 				"status":            statusExpired,
 				"revocation_reason": statusExpired,
 			}).Error
+			_ = compactLeaseOperationOutputs(database(), lease.ID)
 		}
 		return models.MCPLease{}, ErrLeaseInactive
 	}
@@ -204,9 +214,89 @@ func adminHistoryCutoff(now time.Time) time.Time {
 }
 
 // CleanupHistory drops MCP authorizations, operations, tokens, and pending
-// requests older than the 7-day admin history window.
+// requests older than the 3-day admin history window.
 func CleanupHistory() error {
 	return cleanupHistory(database(), time.Now().UTC())
+}
+
+func purgeInactiveHistory(db *gorm.DB, now time.Time) (int, error) {
+	var leases []models.MCPLease
+	if err := db.Where(
+		"status IN ? OR (status = ? AND expires_at <= ?)",
+		[]string{statusDenied, statusExpired, statusRevoked},
+		statusActive,
+		now,
+	).Find(&leases).Error; err != nil {
+		return 0, err
+	}
+	ids := make([]string, 0, len(leases))
+	families := make([]string, 0, len(leases))
+	for _, lease := range leases {
+		if leaseLive(lease, now) {
+			continue
+		}
+		ids = append(ids, lease.ID)
+		families = append(families, lease.TokenFamilyID)
+		remote.CloseMCPLeaseSessions(lease.ID)
+	}
+	if len(ids) > 0 {
+		if err := db.Where("lease_id IN ?", ids).Delete(&models.MCPOperation{}).Error; err != nil {
+			return 0, err
+		}
+		if err := db.Where("lease_id IN ?", ids).Delete(&models.MCPToken{}).Error; err != nil {
+			return 0, err
+		}
+		if err := db.Where("family_id IN ?", families).Delete(&models.MCPToken{}).Error; err != nil {
+			return 0, err
+		}
+		if err := db.Where("id IN ?", ids).Delete(&models.MCPLease{}).Error; err != nil {
+			return 0, err
+		}
+	}
+	if err := db.Where("status = ?", statusDenied).Delete(&models.MCPAuthorizationRequest{}).Error; err != nil {
+		return 0, err
+	}
+	if err := compactStaleOperationOutputs(db, now); err != nil {
+		return len(ids), err
+	}
+	return len(ids), nil
+}
+
+func recordDeniedAuthorization(db *gorm.DB, req models.MCPAuthorizationRequest, ownerUUID, loginHash string, now time.Time) (models.MCPLease, error) {
+	leaseID, err := newID("ls_")
+	if err != nil {
+		return models.MCPLease{}, err
+	}
+	familyID, err := newID("tf_")
+	if err != nil {
+		return models.MCPLease{}, err
+	}
+	lease := models.MCPLease{
+		ID:                     leaseID,
+		OwnerUserUUID:          ownerUUID,
+		OwnerLoginSessionHash:  loginHash,
+		OAuthClientID:          req.ClientID,
+		AuthorizationRequestID: req.ID,
+		TokenFamilyID:          familyID,
+		TargetUUIDs:            encodeTargetUUIDs(nil),
+		Mode:                   modeFull,
+		MaxConcurrency:         0,
+		Status:                 statusDenied,
+		PolicyVersion:          PolicyVersion,
+		CreatedAt:              now,
+		ExpiresAt:              now,
+		RevocationReason:       statusDenied,
+	}
+	if err := db.Create(&lease).Error; err != nil {
+		return models.MCPLease{}, err
+	}
+	if err := db.Model(&req).Updates(map[string]any{
+		"status":          statusDenied,
+		"owner_user_uuid": ownerUUID,
+	}).Error; err != nil {
+		return lease, err
+	}
+	return lease, nil
 }
 
 func cleanupHistory(db *gorm.DB, now time.Time) error {
@@ -245,6 +335,9 @@ func cleanupHistory(db *gorm.DB, now time.Time) error {
 	if err := db.Where("created_at < ?", cutoff).Delete(&models.MCPToken{}).Error; err != nil {
 		return err
 	}
+	if err := compactStaleOperationOutputs(db, now); err != nil {
+		return err
+	}
 	return pruneUnusedMCPClients(db, now)
 }
 
@@ -269,4 +362,51 @@ func unusedMCPClientCount() int64 {
 		AND NOT EXISTS (SELECT 1 FROM mcp_tokens WHERE mcp_tokens.client_id = mcp_clients.client_id)
 	`).Scan(&count).Error
 	return count
+}
+
+func maybeCompactOperationOutputs() {
+	outputCompactMu.Lock()
+	defer outputCompactMu.Unlock()
+	now := time.Now().UTC()
+	if !lastOutputCompact.IsZero() && now.Sub(lastOutputCompact) < outputCompactMinInterval {
+		return
+	}
+	if err := compactStaleOperationOutputs(database(), now); err != nil {
+		return
+	}
+	lastOutputCompact = now
+}
+
+func compactStaleOperationOutputs(db *gorm.DB, now time.Time) error {
+	if db == nil {
+		return nil
+	}
+	keepFullAfter := now.Add(-operationOutputRetention)
+	return db.Exec(`
+		UPDATE mcp_operations
+		SET
+			output = substr(output, 1, ?),
+			truncated = CASE WHEN length(output) > ? THEN 1 ELSE truncated END
+		WHERE length(output) > ?
+		  AND (
+		    lease_id NOT IN (
+		      SELECT id FROM mcp_leases
+		      WHERE status = ? AND revoked_at IS NULL AND expires_at > ?
+		    )
+		    OR (finished_at IS NOT NULL AND finished_at <= ?)
+		  )
+	`, AdminOutputPreviewMax, AdminOutputPreviewMax, AdminOutputPreviewMax, statusActive, now, keepFullAfter).Error
+}
+
+func compactLeaseOperationOutputs(db *gorm.DB, leaseIDs ...string) error {
+	if db == nil || len(leaseIDs) == 0 {
+		return nil
+	}
+	return db.Exec(`
+		UPDATE mcp_operations
+		SET
+			output = substr(output, 1, ?),
+			truncated = CASE WHEN length(output) > ? THEN 1 ELSE truncated END
+		WHERE length(output) > ? AND lease_id IN ?
+	`, AdminOutputPreviewMax, AdminOutputPreviewMax, AdminOutputPreviewMax, leaseIDs).Error
 }

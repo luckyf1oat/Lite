@@ -10,7 +10,6 @@ import (
 
 	"github.com/nuomiiiii/lite/database/metricstore"
 	"github.com/nuomiiiii/lite/database/models"
-	dbtasks "github.com/nuomiiiii/lite/database/tasks"
 	"github.com/nuomiiiii/lite/pkg/metric"
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
 	publicweb "github.com/nuomiiiii/lite/web/public"
@@ -47,17 +46,13 @@ type dashboardPacketLossKey struct {
 	taskID uint
 }
 
-func loadDashboardPacketLoss(ctx context.Context, clientList []models.Client, now time.Time, rankingLimit int) (dashboardPacketLossSummary, error) {
+func loadDashboardPacketLoss(ctx context.Context, clientList []models.Client, pingTasks []models.PingTask, now time.Time, rankingLimit int) (dashboardPacketLossSummary, error) {
 	result := dashboardPacketLossSummary{WindowMinutes: int(dashboardPacketLossWindow / time.Minute)}
 	store := metricstore.GetStore()
 	if store == nil {
 		return result, fmt.Errorf("metric store is not initialized")
 	}
-	taskList, err := dbtasks.GetAllPingTasks()
-	if err != nil {
-		return result, fmt.Errorf("list ping tasks: %w", err)
-	}
-	if len(taskList) == 0 || len(clientList) == 0 {
+	if len(pingTasks) == 0 || len(clientList) == 0 {
 		return result, nil
 	}
 
@@ -81,7 +76,7 @@ func loadDashboardPacketLoss(ctx context.Context, clientList []models.Client, no
 	for _, uuid := range agent_runtime.GetAllOnlineUUIDs() {
 		online[uuid] = struct{}{}
 	}
-	result.Ranking = summarizeDashboardPacketLoss(clientList, taskList, series, online, rankingLimit)
+	result.Ranking = summarizeDashboardPacketLoss(clientList, pingTasks, series, online, rankingLimit)
 	return result, nil
 }
 
@@ -123,8 +118,6 @@ func summarizeDashboardPacketLoss(clientList []models.Client, taskList []models.
 		if _, ok := online[client.UUID]; !ok {
 			continue
 		}
-		var best dashboardPacketLossRankItem
-		found := false
 		for _, task := range taskList {
 			if !task.AppliesToClient(client.UUID) {
 				continue
@@ -138,7 +131,7 @@ func summarizeDashboardPacketLoss(clientList []models.Client, taskList []models.
 				continue
 			}
 			lossRate := aggregate.losses / float64(aggregate.total) * 100
-			candidate := dashboardPacketLossRankItem{
+			result = dashboardTopPacketLoss(result, dashboardPacketLossRankItem{
 				UUID:        client.UUID,
 				Name:        dashboardNodeName(client),
 				TaskID:      task.Id,
@@ -148,14 +141,7 @@ func summarizeDashboardPacketLoss(clientList []models.Client, taskList []models.
 				Total:       aggregate.total,
 				Valid:       max(0, aggregate.total-lost),
 				clientOrder: clientOrder,
-			}
-			if !found || dashboardPacketLossBefore(candidate, best) {
-				best = candidate
-				found = true
-			}
-		}
-		if found {
-			result = dashboardTopPacketLoss(result, best, rankingLimit)
+			}, rankingLimit)
 		}
 	}
 	return result
@@ -175,25 +161,7 @@ func dashboardPacketLossBefore(left, right dashboardPacketLossRankItem) bool {
 }
 
 func dashboardTopPacketLoss(top []dashboardPacketLossRankItem, item dashboardPacketLossRankItem, limit int) []dashboardPacketLossRankItem {
-	if !dashboardRankingLimitAllowed(limit) {
-		limit = 5
-	}
-	insertAt := len(top)
-	for index, current := range top {
-		if dashboardPacketLossBefore(item, current) {
-			insertAt = index
-			break
-		}
-	}
-	if insertAt >= limit {
-		return top
-	}
-	if len(top) < limit {
-		top = append(top, dashboardPacketLossRankItem{})
-	}
-	copy(top[insertAt+1:], top[insertAt:len(top)-1])
-	top[insertAt] = item
-	return top
+	return dashboardInsertRanked(top, item, limit, dashboardPacketLossBefore)
 }
 
 func dashboardNodeName(client models.Client) string {
@@ -224,7 +192,7 @@ func decorateDashboardNavigation(result dashboardChartsResponse) dashboardCharts
 	}
 	for index := range result.Latency.JitterRanking {
 		item := &result.Latency.JitterRanking[index]
-		item.DetailURL = navigation.ServerNetworkURL(item.UUID)
+		item.DetailURL = navigation.ServerDetailURL(item.UUID, item.TaskID)
 	}
 	result.PacketLoss.Ranking = append([]dashboardPacketLossRankItem(nil), result.PacketLoss.Ranking...)
 	for index := range result.PacketLoss.Ranking {

@@ -59,14 +59,32 @@ func ingestMCPCapability(uuid string, params v2.PullParams) {
 	clients.SetMCPCapability(uuid, full, version)
 }
 
+const pingResultLookback = 6 * time.Hour
+
 // ingestPingResult 保存一条 ping 探测结果。
-func ingestPingResult(uuid string, taskID uint, value int) error {
+func ingestPingResult(uuid string, taskID uint, value int, finishedAt time.Time) error {
 	return tasks.SavePingRecord(models.PingRecord{
 		Client: uuid,
 		TaskId: taskID,
 		Value:  value,
-		Time:   time.Now().UTC(),
+		Time:   pingResultTime(finishedAt),
 	})
+}
+
+func pingResultTime(finishedAt time.Time) time.Time {
+	return pingResultTimeAt(finishedAt, time.Now().UTC())
+}
+
+func pingResultTimeAt(finishedAt, now time.Time) time.Time {
+	now = now.UTC()
+	if finishedAt.IsZero() {
+		return now
+	}
+	candidate := finishedAt.UTC()
+	if candidate.After(now.Add(time.Minute)) || now.Sub(candidate) > pingResultLookback {
+		return now
+	}
+	return candidate
 }
 
 func ingestTaskResult(uuid string, params v2.TaskResultParams) error {

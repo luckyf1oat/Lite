@@ -230,6 +230,13 @@ func TestDashboardResourceRankingUsesLatestReportsAndBoundedTopN(t *testing.T) {
 	assert.Equal(t, "node-g", result.CPU[0].Name)
 	assert.Equal(t, "node-g", result.Memory[0].Name)
 	assert.Equal(t, "node-a", result.Disk[0].Name)
+
+	all := buildDashboardResources(clients, 0)
+	require.Len(t, all.CPU, 7)
+	require.Len(t, all.Memory, 7)
+	require.Len(t, all.Disk, 7)
+	assert.Equal(t, "node-g", all.CPU[0].Name)
+	assert.Equal(t, "node-a", all.CPU[6].Name)
 }
 
 func TestParseDashboardSectionsDefaultsAndFilters(t *testing.T) {
@@ -261,4 +268,15 @@ func TestParseDashboardSectionsDefaultsAndFilters(t *testing.T) {
 		"sections": "packet_loss",
 	}})
 	assert.Equal(t, dashboardChartPacketLoss, packetLossSections)
+
+	_, allLimit := parseDashboardChartRequest(&rpc.JsonRpcRequest{Params: map[string]any{
+		"sections": "traffic",
+		"limit":    "0",
+	}})
+	assert.Equal(t, dashboardRankingLimitAll, allLimit)
+	assert.False(t, dashboardChartNeedsPingTasks(dashboardChartTraffic))
+	assert.False(t, dashboardChartNeedsPingTasks(0))
+	assert.True(t, dashboardChartNeedsPingTasks(dashboardChartLatency))
+	assert.True(t, dashboardChartNeedsPingTasks(dashboardChartLatencyJitter))
+	assert.True(t, dashboardChartNeedsPingTasks(dashboardChartPacketLoss))
 }

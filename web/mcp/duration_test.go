@@ -90,6 +90,12 @@ func TestTruncateTTLNeverExceedsLease(t *testing.T) {
 	}
 }
 
+func TestAuthCodeTTL(t *testing.T) {
+	if AuthCodeTTL != 180*time.Second {
+		t.Fatalf("AuthCodeTTL = %v, want 180s", AuthCodeTTL)
+	}
+}
+
 func TestSameResource(t *testing.T) {
 	if !sameResource("https://lite.example/mcp", "https://lite.example/mcp/") {
 		t.Fatal("trailing slash should match")
