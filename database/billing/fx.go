@@ -24,9 +24,9 @@ const (
 )
 
 // RequiredFXCurrencies are stored on every snapshot. Display is only CNY or USD,
-// so EUR/GBP/CAD quotes stay in the same snapshot and convert in one ratio
+// so EUR/GBP/CAD/HKD quotes stay in the same snapshot and convert in one ratio
 // (native → CNY or native → USD), not by turning the amount into USD first.
-var RequiredFXCurrencies = []string{"USD", "CNY", "EUR", "GBP", "CAD"}
+var RequiredFXCurrencies = []string{"USD", "CNY", "EUR", "GBP", "CAD", "HKD"}
 
 var isoCurrencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 

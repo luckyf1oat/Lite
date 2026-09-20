@@ -148,6 +148,12 @@ func TestAdminEditSettingsCancelsQueuedExecWhenRemoteTurnsOff(t *testing.T) {
 	if !strings.Contains(fn, "settingsRequireHumanSession") || !strings.Contains(fn, "denyAPIKey") {
 		t.Fatal("custom HTML and theme settings must require a human session")
 	}
+	if !strings.Contains(fn, "if err := accounts.CapLegacySessionExpires") {
+		t.Fatal("TTL save still ignores CapLegacySessionExpires errors")
+	}
+	if strings.Contains(fn, "_ = accounts.CapLegacySessionExpires") || strings.Contains(fn, "_, _, _ = accounts.TouchSession") {
+		t.Fatal("TTL save still discards session cap or current-session refresh errors")
+	}
 }
 
 func TestPersistExecTerminalResultsDoesNotIgnoreErrors(t *testing.T) {

@@ -57,6 +57,9 @@ func TestRegisterProtectsClientTokenRoutesWithSensitive2FA(t *testing.T) {
 	if !bytes.Contains(source, []byte(`clientGroup.GET("/:uuid/token", api.RejectAPIKey(), api.RequireSensitive2FA(), jsonRpc.Bind("admin:getClientToken"`)) {
 		t.Fatal("GET token must require a human session and sensitive 2FA")
 	}
+	if !bytes.Contains(source, []byte(`clientGroup.POST("/:uuid/token", api.RejectAPIKey(), api.RequireSensitive2FA(), jsonRpc.Bind("admin:getClientToken"`)) {
+		t.Fatal("POST token must require a human session and sensitive 2FA so passkeys can replace OTP")
+	}
 	if !bytes.Contains(source, []byte(`clientGroup.POST("/token/rotate", api.RejectAPIKey(), api.RequireSensitive2FA(), jsonRpc.Bind("admin:rotateClientToken")`)) {
 		t.Fatal("rotate token must require a human session and sensitive 2FA")
 	}
@@ -71,6 +74,15 @@ func TestRegisterProtectsClientTokenRoutesWithSensitive2FA(t *testing.T) {
 	}
 	if !bytes.Contains(source, []byte(`g.POST("/update/user", api.RejectAPIKey(), admin.UpdateUser)`)) {
 		t.Fatal("user update must reject API keys")
+	}
+	if !bytes.Contains(source, []byte("account.Use(api.RejectAPIKey())")) {
+		t.Fatal("account passkey APIs must reject API keys")
+	}
+	if !bytes.Contains(source, []byte("twoFactor.Use(api.RejectAPIKey())")) {
+		t.Fatal("2FA APIs must reject API keys")
+	}
+	if !bytes.Contains(source, []byte("oauth2.Use(api.RejectAPIKey())")) {
+		t.Fatal("SSO bind/unbind APIs must reject API keys")
 	}
 }
 
@@ -98,6 +110,9 @@ func TestRegisterRemovesLegacyAgentAndTerminalRoutes(t *testing.T) {
 	}
 	if !routes["POST /api/admin/client/remote/authorize"] || !routes["POST /api/admin/client/remote/revoke"] {
 		t.Fatal("remote grant routes are missing")
+	}
+	if !routes["POST /api/admin/account/passkeys/confirm/options"] || !routes["GET /api/admin/oauth2/confirm-passkey"] {
+		t.Fatal("passkey confirmation routes are missing")
 	}
 }
 

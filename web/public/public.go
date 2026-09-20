@@ -29,7 +29,7 @@ var legacyDefaultFaviconSHA256 = [32]byte{
 	0x29, 0x4b, 0xf3, 0x38, 0x85, 0xc7, 0x1a, 0x69,
 }
 
-//go:embed systemUI rescueTheme bundledThemes
+//go:embed systemUI bundledThemes
 var PublicFS embed.FS
 
 // 常量定义
@@ -662,7 +662,7 @@ func Static(r *gin.RouterGroup, noRoute func(handlers ...gin.HandlerFunc)) {
 		if IsLocalThemeUsable(themeID) {
 			return localThemeFileContent(themeID, relativePath)
 		}
-		return embeddedFileContent("rescueTheme", relativePath)
+		return embeddedFileContent("bundledThemes/Lite-theme", relativePath)
 	}
 
 	serveWebAppManifest := func(c *gin.Context) {
@@ -838,6 +838,10 @@ func Static(r *gin.RouterGroup, noRoute func(handlers ...gin.HandlerFunc)) {
 			}
 		}()
 		reqPath := c.Request.URL.Path
+		if isLegacyAdminDashboardPath(reqPath) {
+			redirectLegacyAdminDashboard(c)
+			return
+		}
 		cfg := getConfig()
 		if isRootServiceWorkerPath(reqPath) {
 			setNoStoreHeaders(c)
@@ -906,6 +910,19 @@ func isTerminalApplicationPath(requestPath string) bool {
 
 func isAdminApplicationPath(requestPath string) bool {
 	return requestPath == "/admin" || strings.HasPrefix(requestPath, "/admin/")
+}
+
+func isLegacyAdminDashboardPath(requestPath string) bool {
+	cleaned := path.Clean("/" + strings.TrimPrefix(requestPath, "/"))
+	return cleaned == "/admin/dashboard"
+}
+
+func redirectLegacyAdminDashboard(c *gin.Context) {
+	target := "/admin"
+	if raw := c.Request.URL.RawQuery; raw != "" {
+		target += "?" + raw
+	}
+	c.Redirect(http.StatusFound, target)
 }
 
 const themeServiceWorkerAllowed = "/__lite_theme_sw/"

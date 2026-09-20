@@ -10,6 +10,8 @@ func mainDatabaseCacheSizeKBFor(memoryBytes int64) int {
 	if memoryBytes <= 0 {
 		memoryBytes = gibibyte
 	}
+	// lite.db also stores MCP history, audit logs and sessions, so the page
+	// cache has to cover a file that can grow well past a few megabytes.
 	switch {
 	case memoryBytes <= gibibyte:
 		return 8 * 1024

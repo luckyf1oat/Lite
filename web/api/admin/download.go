@@ -34,6 +34,7 @@ var backupPersistentPaths = []string{
 	"font.ttf",
 	"secret.key",
 	"theme",
+	"avatars",
 }
 
 var configOnlyEmptyTables = []string{
@@ -392,9 +393,9 @@ func buildBackupArchive(path, contentDir string, scope backupScope, now time.Tim
 	return file.Close()
 }
 
-// DownloadBackup creates either a complete portable backup (including all
-// monitoring history) or a configuration-only package compatible with the
-// current fork and the latest upstream restore format.
+// DownloadBackup creates either a complete Lite backup (including all
+// monitoring history) or a configuration-only package for restoring this
+// Lite instance. Exported archives are not intended for upstream Komari.
 func DownloadBackup(c *gin.Context) {
 	scope, err := parseBackupScope(c.Query("scope"))
 	if err != nil {

@@ -116,8 +116,14 @@ func TestBuildMetricConfigUsesFixedSQLiteConnectionStrategy(t *testing.T) {
 	if cfg.MaxOpenConns != 1 || cfg.MaxIdleConns != 1 {
 		t.Fatalf("SQLite primary pool = open:%d idle:%d, want 1/1", cfg.MaxOpenConns, cfg.MaxIdleConns)
 	}
-	if cfg.SQLite.ReadPoolSize < 1 || cfg.SQLite.ReadPoolSize > 3 {
-		t.Fatalf("SQLite read pool size = %d, want adaptive range 1..3", cfg.SQLite.ReadPoolSize)
+	if cfg.SQLite.ReadPoolSize < 1 || cfg.SQLite.ReadPoolSize > 2 {
+		t.Fatalf("SQLite read pool size = %d, want adaptive range 1..2", cfg.SQLite.ReadPoolSize)
+	}
+	if cfg.SQLite.CacheSizeKB > 8*1024 {
+		t.Fatalf("SQLite writer cache = %d KiB, want <= 8 MiB", cfg.SQLite.CacheSizeKB)
+	}
+	if cfg.SQLite.MMapSizeBytes != 0 {
+		t.Fatalf("SQLite mmap = %d, want 0", cfg.SQLite.MMapSizeBytes)
 	}
 }
 

@@ -153,6 +153,7 @@ func GetPublicInfo() (map[string]interface{}, error) {
 		"oauth_enable":              cst.OAuthEnabled,
 		"oauth_provider":            cst.OAuthProvider,
 		"disable_password_login":    cst.DisablePasswordLogin,
+		"passkey_login":             passkeyLoginEnabled(db),
 		"cors_origin_check_enabled": cst.CorsOriginCheckEnabled,
 		"record_enabled":            retention.AllPositive, // 兼容旧版本主题
 		"record_preserve_time":      retention.MaxDays * 24,
@@ -162,4 +163,15 @@ func GetPublicInfo() (map[string]interface{}, error) {
 		"theme":                     cst.Theme,
 		"theme_settings":            tc_data,
 	}, nil
+}
+
+func passkeyLoginEnabled(db *gorm.DB) bool {
+	if db == nil {
+		return false
+	}
+	var n int64
+	if err := db.Model(&models.PasskeyCredential{}).Count(&n).Error; err != nil {
+		return false
+	}
+	return n > 0
 }

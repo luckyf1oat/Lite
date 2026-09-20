@@ -25,6 +25,4 @@ runs:
         grep -F '/system-assets/' web/public/systemUI/dist/index.html
         test -f web/public/bundledThemes/Lite-theme/Lite-theme.json
         test -f web/public/bundledThemes/Lite-theme/dist/index.html
-        test -f web/public/rescueTheme/Lite-theme.json
-        test -f web/public/rescueTheme/dist/index.html
-        test ! -e web/public/rescueTheme/komari-theme.json
+        test ! -e web/public/rescueTheme

@@ -6,11 +6,14 @@ import (
 )
 
 const (
-	loginLimitWindow        = 3 * time.Minute
-	loginLimitMaxFailures   = 5
-	loginLimitCapacity      = 4096
-	loginLimitPruneEveryOps = 256
-	loginLimitPruneMinAge   = time.Minute
+	loginLimitWindow          = 3 * time.Minute
+	loginLimitMaxFailures     = 5
+	loginLimitCapacity        = 4096
+	loginLimitPruneEveryOps   = 256
+	loginLimitPruneMinAge     = time.Minute
+	PasskeyThrottleBucket     = "passkey"
+	PasskeyOptionsBucket      = "passkey-options"
+	PasskeyOptionsMaxRequests = 20
 )
 
 type loginLimitBucket struct {
@@ -25,7 +28,22 @@ var (
 	loginLimitLastPrune time.Time
 )
 
+func LoginThrottled(clientIP, username string) bool {
+	return loginThrottledAt(clientIP, username, loginLimitMaxFailures)
+}
+
 func loginThrottled(clientIP, username string) bool {
+	return loginThrottledAt(clientIP, username, loginLimitMaxFailures)
+}
+
+func LoginRequestThrottled(clientIP, username string, max int) bool {
+	if max <= 0 {
+		max = loginLimitMaxFailures
+	}
+	return loginThrottledAt(clientIP, username, max)
+}
+
+func loginThrottledAt(clientIP, username string, max int) bool {
 	if clientIP == "" || username == "" {
 		return false
 	}
@@ -43,7 +61,7 @@ func loginThrottled(clientIP, username string) bool {
 		delete(loginLimitByPair, key)
 		return false
 	}
-	return bucket.failures >= loginLimitMaxFailures
+	return bucket.failures >= max
 }
 
 func recordLoginFailure(clientIP, username string) {
@@ -76,6 +94,10 @@ func clearLoginFailures(clientIP, username string) {
 }
 
 func RecordLoginFailure(clientIP, username string) {
+	recordLoginFailure(clientIP, username)
+}
+
+func RecordLoginRequest(clientIP, username string) {
 	recordLoginFailure(clientIP, username)
 }
 

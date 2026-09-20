@@ -89,15 +89,17 @@ func SessionStillValid(userUUID, loginSession string) bool {
 		return false
 	}
 	key := SessionLookupKey(loginSession)
-	var found int
+	var record models.Session
 	err := dbcore.GetDBInstance().
 		Model(&models.Session{}).
-		Select("1").
 		Joins("INNER JOIN users ON users.uuid = sessions.uuid").
-		Where("sessions.session = ? AND sessions.uuid = ? AND sessions.expires > ?", key, userUUID, time.Now().UTC()).
+		Where("sessions.session = ? AND sessions.uuid = ?", key, userUUID).
 		Limit(1).
-		Scan(&found).Error
-	return err == nil && found == 1
+		Take(&record).Error
+	if err != nil {
+		return false
+	}
+	return !sessionInactive(record, time.Now().UTC(), SessionTTL())
 }
 
 func GetSession(session string) (uuid string, err error) {
@@ -105,7 +107,7 @@ func GetSession(session string) (uuid string, err error) {
 	if err != nil {
 		return "", err
 	}
-	if time.Now().UTC().After(sessionRecord.Expires) {
+	if sessionInactive(sessionRecord, time.Now().UTC(), SessionTTL()) {
 		_ = DeleteSession(session)
 		return "", errors.New("session expired")
 	}
@@ -113,11 +115,11 @@ func GetSession(session string) (uuid string, err error) {
 }
 
 func GetUserBySession(session string) (models.User, error) {
-	sessionRecord, err := lookupSession(session)
+	uuid, err := GetSession(session)
 	if err != nil {
 		return models.User{}, err
 	}
-	return GetUserByUUID(sessionRecord.UUID)
+	return GetUserByUUID(uuid)
 }
 
 func DeleteSession(session string) (err error) {

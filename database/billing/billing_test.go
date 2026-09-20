@@ -50,7 +50,7 @@ func saveFX(t *testing.T, db *gorm.DB, fetchedAt time.Time, cny, cad string) mod
 	t.Helper()
 	snapshot := models.BillingFXSnapshot{
 		Provider: FXProvider, BaseCurrency: "USD",
-		RatesJSON: fmt.Sprintf(`{"CAD":"%s","CNY":"%s","EUR":"0.92","GBP":"0.78","USD":"1"}`, cad, cny),
+		RatesJSON: fmt.Sprintf(`{"CAD":"%s","CNY":"%s","EUR":"0.92","GBP":"0.78","HKD":"7.8","USD":"1"}`, cad, cny),
 		FetchedAt: fetchedAt.UTC(),
 	}
 	require.NoError(t, db.Create(&snapshot).Error)
@@ -70,7 +70,7 @@ func saveClient(t *testing.T, db *gorm.DB, client models.Client) models.Client {
 }
 
 func TestCurrencyUsesExactMicrosAndCrossRates(t *testing.T) {
-	rates := map[string]string{"USD": "1", "CNY": "7.2", "CAD": "1.35"}
+	rates := map[string]string{"USD": "1", "CNY": "7.2", "CAD": "1.35", "HKD": "7.8"}
 	usd, err := ConvertMicros(7_200_000, "CNY", "USD", rates)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1_000_000), usd)
@@ -80,6 +80,12 @@ func TestCurrencyUsesExactMicrosAndCrossRates(t *testing.T) {
 	cny, err := ConvertMicros(1_350_000, "CAD", "CNY", rates)
 	require.NoError(t, err)
 	assert.Equal(t, int64(7_200_000), cny)
+	hkd, err := ConvertMicros(7_200_000, "CNY", "HKD", rates)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7_800_000), hkd)
+	cnyFromHKD, err := ConvertMicros(7_800_000, "HKD", "CNY", rates)
+	require.NoError(t, err)
+	assert.Equal(t, int64(7_200_000), cnyFromHKD)
 	minimum := strconvInt64(t, "-9223372036854.775808")
 	assert.Equal(t, int64(math.MinInt64), minimum)
 	assert.Equal(t, "-9223372036854.775808", FormatAmountMicros(minimum))
@@ -100,6 +106,8 @@ func TestNormalizeCurrencyUsesISORegistry(t *testing.T) {
 		{"£", "GBP"},
 		{"C$", "CAD"},
 		{"CAD", "CAD"},
+		{"HK$", "HKD"},
+		{"HKD", "HKD"},
 	} {
 		normalized, valid := NormalizeCurrency(tc.in)
 		assert.True(t, valid, tc.in)
@@ -593,7 +601,7 @@ func fxServer(t *testing.T, cny string) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(fmt.Sprintf(`{"base":"USD","rates":{"CAD":1.35,"CNY":%s,"EUR":0.92,"GBP":0.78}}`, cny)))
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"base":"USD","rates":{"CAD":1.35,"CNY":%s,"EUR":0.92,"GBP":0.78,"HKD":7.8}}`, cny)))
 	}))
 	t.Cleanup(server.Close)
 	return server
@@ -616,12 +624,13 @@ func TestUpgradeFromPreBillingLocksFXAtUpgrade(t *testing.T) {
 	saveClient(t, db, models.Client{Name: "legacy-eur", Price: 9.20, BillingCycle: 30, Currency: "EUR"})
 	saveClient(t, db, models.Client{Name: "legacy-cad", Price: 13.50, BillingCycle: 30, Currency: "CAD"})
 	saveClient(t, db, models.Client{Name: "legacy-gbp", Price: 7.80, BillingCycle: 30, Currency: "GBP"})
+	saveClient(t, db, models.Client{Name: "legacy-hkd", Price: 78, BillingCycle: 30, Currency: "HKD"})
 	require.NoError(t, EnsureInitialPriceVersions(db, now))
 	require.NoError(t, ReconcileStoredCurrencies(db))
 
 	var unlocked int64
 	require.NoError(t, db.Model(&models.BillingPriceVersion{}).Where("fx_snapshot_id IS NULL").Count(&unlocked).Error)
-	assert.Equal(t, int64(5), unlocked)
+	assert.Equal(t, int64(6), unlocked)
 
 	require.NoError(t, ApplyUpgradeFX(context.Background(), db, nil, fxServer(t, "7.2").URL))
 
@@ -636,7 +645,7 @@ func TestUpgradeFromPreBillingLocksFXAtUpgrade(t *testing.T) {
 	assert.Equal(t, "2592.000000", *cnyRows["legacy-usd"].YearlyAverage)
 	require.NotNil(t, cnyRows["legacy-cny"].MonthlyAverage)
 	assert.Equal(t, "72.000000", *cnyRows["legacy-cny"].MonthlyAverage)
-	for _, name := range []string{"legacy-eur", "legacy-cad", "legacy-gbp"} {
+	for _, name := range []string{"legacy-eur", "legacy-cad", "legacy-gbp", "legacy-hkd"} {
 		require.NotNil(t, cnyRows[name].DailyAverage, name)
 		require.NotNil(t, cnyRows[name].MonthlyAverage, name)
 		require.NotNil(t, cnyRows[name].YearlyAverage, name)
@@ -651,7 +660,7 @@ func TestUpgradeFromPreBillingLocksFXAtUpgrade(t *testing.T) {
 	assert.Equal(t, "30.000000", *usdRows["legacy-usd"].MonthlyAverage)
 	require.NotNil(t, usdRows["legacy-cny"].MonthlyAverage)
 	assert.Equal(t, "10.000000", *usdRows["legacy-cny"].MonthlyAverage)
-	for _, name := range []string{"legacy-eur", "legacy-cad", "legacy-gbp"} {
+	for _, name := range []string{"legacy-eur", "legacy-cad", "legacy-gbp", "legacy-hkd"} {
 		require.NotNil(t, usdRows[name].MonthlyAverage, name)
 		assert.Equal(t, "10.000000", *usdRows[name].MonthlyAverage, name)
 	}
@@ -797,6 +806,13 @@ func TestLockedAveragesUseNativeRatesNotUSDHop(t *testing.T) {
 	gbpCNY, ok := convertLockedMicros(7_800_000, gbp, "CNY", snapshots)
 	require.True(t, ok)
 	assert.Equal(t, int64(72_000_000), gbpCNY)
+
+	hkd := version
+	hkd.Currency = "HKD"
+	hkd.PriceMicros = 78_000_000
+	hkdCNY, ok := convertLockedMicros(78_000_000, hkd, "CNY", snapshots)
+	require.True(t, ok)
+	assert.Equal(t, int64(72_000_000), hkdCNY)
 }
 
 func TestRefreshFXBackfillsVersionsMissingSnapshots(t *testing.T) {
@@ -810,7 +826,7 @@ func TestRefreshFXBackfillsVersionsMissingSnapshots(t *testing.T) {
 	}).Error)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"base":"USD","rates":{"CAD":1.35,"CNY":7.2,"EUR":0.92,"GBP":0.78}}`))
+		_, _ = w.Write([]byte(`{"base":"USD","rates":{"CAD":1.35,"CNY":7.2,"EUR":0.92,"GBP":0.78,"HKD":7.8}}`))
 	}))
 	defer server.Close()
 

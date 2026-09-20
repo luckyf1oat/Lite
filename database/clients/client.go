@@ -814,6 +814,9 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 		if strings.EqualFold(currency, "CAD") || strings.EqualFold(currency, "CA$") || strings.EqualFold(currency, "C$") {
 			currency = "CAD"
 		}
+		if strings.EqualFold(currency, "HKD") || strings.EqualFold(currency, "HK$") {
+			currency = "HKD"
+		}
 		updates["currency"] = currency
 	}
 	if value, exists := updates["expired_at"]; exists {

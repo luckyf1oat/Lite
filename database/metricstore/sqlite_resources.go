@@ -30,47 +30,35 @@ func sqliteResourceProfileFor(memoryBytes int64, cpuCount int) sqliteResourcePro
 		cpuCount = 1
 	}
 
+	// Size caches for a typical Lite fleet, not the host's unused RAM.
+	// mmap is off: SQLite would otherwise keep hot pages in both the page
+	// cache and the mapping, so RSS grows with metrics.db for no extra hit rate.
 	profile := sqliteResourceProfile{
 		MemoryBytes:         memoryBytes,
 		CPUCount:            cpuCount,
-		WriterCacheKB:       12 * 1024,
-		ReaderCacheKB:       10 * 1024,
-		ReadPoolSize:        2,
-		HeavyReadConcurrent: 2,
-		MMapBytes:           128 * 1024 * 1024,
+		WriterCacheKB:       4 * 1024,
+		ReaderCacheKB:       2 * 1024,
+		ReadPoolSize:        1,
+		HeavyReadConcurrent: 1,
+		MMapBytes:           0,
 	}
 	switch {
 	case memoryBytes <= 512*1024*1024:
-		profile.WriterCacheKB = 8 * 1024
-		profile.ReaderCacheKB = 8 * 1024
-		profile.MMapBytes = 64 * 1024 * 1024
+		profile.WriterCacheKB = 2 * 1024
+		profile.ReaderCacheKB = 2 * 1024
 	case memoryBytes <= gib:
-		// The defaults above keep total SQLite heap/cache usage around 32-48 MiB.
+		// Defaults above: about 6 MiB of SQLite cache on 1 GiB hosts.
 	case memoryBytes <= 2*gib:
-		profile.WriterCacheKB = 16 * 1024
-		profile.ReaderCacheKB = 12 * 1024
-		profile.MMapBytes = 192 * 1024 * 1024
+		profile.WriterCacheKB = 6 * 1024
+		profile.ReaderCacheKB = 3 * 1024
 	default:
-		profile.WriterCacheKB = 20 * 1024
-		profile.ReaderCacheKB = 16 * 1024
-		profile.MMapBytes = 256 * 1024 * 1024
+		profile.WriterCacheKB = 8 * 1024
+		profile.ReaderCacheKB = 4 * 1024
 	}
 
-	switch {
-	case cpuCount <= 1:
-		profile.ReadPoolSize = 1
-		profile.HeavyReadConcurrent = 1
-	case cpuCount == 2:
+	if cpuCount >= 2 && memoryBytes > 512*1024*1024 {
 		profile.ReadPoolSize = 2
 		profile.HeavyReadConcurrent = 2
-	default:
-		profile.ReadPoolSize = 3
-		profile.HeavyReadConcurrent = 3
-	}
-	// A small memory limit always wins over a large CPU allocation.
-	if memoryBytes <= 512*1024*1024 {
-		profile.ReadPoolSize = 1
-		profile.HeavyReadConcurrent = 1
 	}
 	return profile
 }

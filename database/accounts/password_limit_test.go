@@ -241,14 +241,13 @@ func TestSessionStillValidUsesOneQuery(t *testing.T) {
 	if !SessionStillValid(user.UUID, hashed) {
 		t.Fatal("hashed login session should still be valid")
 	}
-	var found int
 	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		var record models.Session
 		return tx.Model(&models.Session{}).
-			Select("1").
 			Joins("INNER JOIN users ON users.uuid = sessions.uuid").
-			Where("sessions.session = ? AND sessions.uuid = ? AND sessions.expires > ?", hashed, user.UUID, time.Now().UTC()).
+			Where("sessions.session = ? AND sessions.uuid = ?", hashed, user.UUID).
 			Limit(1).
-			Scan(&found)
+			Take(&record)
 	})
 	lower := strings.ToLower(sql)
 	if strings.Count(lower, "select") != 1 || !strings.Contains(lower, "sessions") || !strings.Contains(lower, "join users") {

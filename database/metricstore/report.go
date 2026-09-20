@@ -36,7 +36,7 @@ var reportTrafficStates sync.Map
 
 const (
 	reportBatchInterval         = 3 * time.Second
-	reportBatchQueueSize        = 4096
+	reportBatchQueueSize        = 256
 	reportBatchWriteTimeout     = 10 * time.Second
 	reportTrafficRateMultiplier = int64(4)
 	reportTrafficRateAllowance  = int64(64 * 1024 * 1024)

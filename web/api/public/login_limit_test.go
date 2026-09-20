@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -199,4 +200,101 @@ func TestLoginPasswordOkThenRequiresTwoFactor(t *testing.T) {
 	require.NoError(t, err)
 	w := login("correctpassword", live)
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestPasskeyOptionsRateLimitCountsEachRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	accounts.ResetLoginLimitsForTest()
+	t.Cleanup(accounts.ResetLoginLimitsForTest)
+
+	router := gin.New()
+	router.POST("/options", PasskeyLoginOptions)
+	call := func() *httptest.ResponseRecorder {
+		req, _ := http.NewRequest(http.MethodPost, "/options", nil)
+		req.Host = "localhost:5273"
+		req.RemoteAddr = "203.0.113.90:43000"
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+	for i := 0; i < accounts.PasskeyOptionsMaxRequests; i++ {
+		w := call()
+		assert.Equal(t, http.StatusOK, w.Code, "request %d", i+1)
+	}
+	w := call()
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+	assert.Contains(t, w.Body.String(), "系统繁忙，请稍后重试")
+}
+
+func TestPasskeyVerifyStillAcceptedAfterLastAllowedOptions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	accounts.ResetLoginLimitsForTest()
+	t.Cleanup(accounts.ResetLoginLimitsForTest)
+
+	router := gin.New()
+	router.POST("/options", PasskeyLoginOptions)
+	router.POST("/verify", PasskeyLoginVerify)
+	options := func() *httptest.ResponseRecorder {
+		req, _ := http.NewRequest(http.MethodPost, "/options", nil)
+		req.Host = "localhost:5273"
+		req.RemoteAddr = "203.0.113.92:43000"
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+	verify := func() *httptest.ResponseRecorder {
+		req, _ := http.NewRequest(http.MethodPost, "/verify", bytes.NewBufferString(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Host = "localhost:5273"
+		req.RemoteAddr = "203.0.113.92:43000"
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+	for i := 0; i < accounts.PasskeyOptionsMaxRequests; i++ {
+		w := options()
+		assert.Equal(t, http.StatusOK, w.Code, "options %d", i+1)
+	}
+	w := verify()
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.NotContains(t, w.Body.String(), "系统繁忙，请稍后重试")
+	w = options()
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+}
+
+func TestPasskeyVerifyInvalidBodyCountsTowardLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	accounts.ResetLoginLimitsForTest()
+	t.Cleanup(accounts.ResetLoginLimitsForTest)
+
+	router := gin.New()
+	router.POST("/verify", PasskeyLoginVerify)
+	call := func() *httptest.ResponseRecorder {
+		req, _ := http.NewRequest(http.MethodPost, "/verify", bytes.NewBufferString(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Host = "localhost:5273"
+		req.RemoteAddr = "203.0.113.91:43000"
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+	for i := 0; i < 5; i++ {
+		w := call()
+		assert.Equal(t, http.StatusBadRequest, w.Code, "request %d", i+1)
+	}
+	w := call()
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+}
+
+func TestPasskeyLoginClearsSharedThrottleBuckets(t *testing.T) {
+	src, err := os.ReadFile("passkeys.go")
+	require.NoError(t, err)
+	text := string(src)
+	assert.Contains(t, text, `ClearLoginFailures(c.ClientIP(), accounts.PasskeyThrottleBucket)`)
+	assert.Contains(t, text, `ClearLoginFailures(c.ClientIP(), accounts.PasskeyOptionsBucket)`)
+	assert.NotContains(t, text, `ClearLoginFailures(c.ClientIP(), user.WebAuthnName())`)
+	assert.Contains(t, text, `RecordLoginRequest(c.ClientIP(), accounts.PasskeyOptionsBucket)`)
+	assert.Contains(t, text, `passkeyOptionsThrottled`)
+	assert.Contains(t, text, `passkeyVerifyThrottled`)
+	assert.NotContains(t, text, `passkeyLoginThrottled`)
 }

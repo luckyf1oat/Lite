@@ -1010,6 +1010,7 @@ func doInitialize() error {
 		!instance.Migrator().HasColumn("return_route_tasks", "notify_recovery")
 	err = instance.AutoMigrate(
 		&models.User{},
+		&models.PasskeyCredential{},
 		&models.Client{},
 		&models.ClientDeploymentProfile{},
 		&models.Log{},

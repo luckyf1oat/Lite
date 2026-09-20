@@ -29,11 +29,13 @@ type dashboardLatencySummary struct {
 }
 
 type dashboardLatencyRankItem struct {
-	UUID      string  `json:"uuid"`
-	Name      string  `json:"name"`
-	Average   float64 `json:"average"`
-	TaskID    uint    `json:"task_id,omitempty"`
-	DetailURL string  `json:"detail_url,omitempty"`
+	UUID        string  `json:"uuid"`
+	Name        string  `json:"name"`
+	Average     float64 `json:"average"`
+	TaskID      uint    `json:"task_id,omitempty"`
+	TaskName    string  `json:"task_name,omitempty"`
+	DetailURL   string  `json:"detail_url,omitempty"`
+	clientOrder int     `json:"-"`
 }
 
 type dashboardLatencyJitterRankItem struct {
@@ -83,8 +85,6 @@ func loadDashboardLatency(ctx context.Context, clientList []models.Client, pingT
 		clientsByID[client.UUID] = client
 	}
 	buckets := make(map[time.Time]dashboardLatencyBucket)
-	nodeBuckets := make(map[string]dashboardLatencyBucket, len(clientList))
-	nodeTaskIDs := make(map[string]map[uint]struct{}, len(clientList))
 	for _, point := range series {
 		if point.Count <= 0 || point.Value < 0 {
 			continue
@@ -98,31 +98,8 @@ func loadDashboardLatency(ctx context.Context, clientList []models.Client, pingT
 		bucket.Sum += weighted
 		bucket.Count += point.Count
 		buckets[bucketTime] = bucket
-		node := nodeBuckets[point.EntityID]
-		node.Sum += weighted
-		node.Count += point.Count
-		nodeBuckets[point.EntityID] = node
-		if taskID, ok := dashboardLatencyTaskID(point); ok {
-			if nodeTaskIDs[point.EntityID] == nil {
-				nodeTaskIDs[point.EntityID] = make(map[uint]struct{})
-			}
-			nodeTaskIDs[point.EntityID][taskID] = struct{}{}
-		}
 	}
-	for _, client := range clientList {
-		node := nodeBuckets[client.UUID]
-		if node.Count <= 0 {
-			continue
-		}
-		name := strings.TrimSpace(client.Name)
-		if name == "" {
-			name = client.UUID
-		}
-		result.Ranking = dashboardTopLatency(result.Ranking, dashboardLatencyRankItem{
-			UUID: client.UUID, Name: name, Average: node.Sum / float64(node.Count),
-			TaskID: dashboardPreferredPingTaskID(client.UUID, nodeTaskIDs[client.UUID], pingTasks),
-		}, rankingLimit)
-	}
+	result.Ranking = summarizeDashboardLatencyRanking(clientList, pingTasks, series, rankingLimit)
 
 	times := make([]time.Time, 0, len(buckets))
 	for bucketTime := range buckets {
@@ -148,10 +125,67 @@ func loadDashboardLatency(ctx context.Context, clientList []models.Client, pingT
 	return result, nil
 }
 
+func summarizeDashboardLatencyRanking(clientList []models.Client, taskList []models.PingTask, series []metric.AggregatePoint, rankingLimit int) []dashboardLatencyRankItem {
+	tasksByID := make(map[uint]models.PingTask, len(taskList))
+	for _, task := range taskList {
+		tasksByID[task.Id] = task
+	}
+	aggregates := make(map[dashboardLatencyJitterKey]dashboardLatencyBucket, len(series))
+	for _, point := range series {
+		if point.Count <= 0 || point.Value < 0 {
+			continue
+		}
+		taskID, ok := dashboardLatencyTaskID(point)
+		if !ok {
+			continue
+		}
+		if _, ok := tasksByID[taskID]; !ok {
+			continue
+		}
+		key := dashboardLatencyJitterKey{client: point.EntityID, taskID: taskID}
+		bucket := aggregates[key]
+		bucket.Sum += point.Value * float64(point.Count)
+		bucket.Count += point.Count
+		aggregates[key] = bucket
+	}
+	result := make([]dashboardLatencyRankItem, 0, rankingLimit)
+	for clientOrder, client := range clientList {
+		for _, task := range taskList {
+			if !task.AppliesToClient(client.UUID) {
+				continue
+			}
+			bucket := aggregates[dashboardLatencyJitterKey{client: client.UUID, taskID: task.Id}]
+			if bucket.Count <= 0 {
+				continue
+			}
+			result = dashboardTopLatency(result, dashboardLatencyRankItem{
+				UUID:        client.UUID,
+				Name:        dashboardNodeName(client),
+				Average:     bucket.Sum / float64(bucket.Count),
+				TaskID:      task.Id,
+				TaskName:    dashboardTaskName(task),
+				clientOrder: clientOrder,
+			}, rankingLimit)
+		}
+	}
+	return result
+}
+
+func dashboardLatencyRankBefore(left, right dashboardLatencyRankItem) bool {
+	if left.Average != right.Average {
+		return left.Average > right.Average
+	}
+	if left.Name != right.Name {
+		return left.Name < right.Name
+	}
+	if left.TaskName != right.TaskName {
+		return left.TaskName < right.TaskName
+	}
+	return left.clientOrder < right.clientOrder
+}
+
 func dashboardTopLatency(top []dashboardLatencyRankItem, item dashboardLatencyRankItem, limit int) []dashboardLatencyRankItem {
-	return dashboardInsertRanked(top, item, limit, func(candidate, current dashboardLatencyRankItem) bool {
-		return candidate.Average > current.Average || (candidate.Average == current.Average && candidate.Name < current.Name)
-	})
+	return dashboardInsertRanked(top, item, limit, dashboardLatencyRankBefore)
 }
 
 func loadDashboardLatencyJitter(ctx context.Context, clientList []models.Client, pingTasks []models.PingTask, now time.Time, rankingLimit int) ([]dashboardLatencyJitterRankItem, error) {
@@ -230,15 +264,6 @@ func summarizeDashboardLatencyJitter(clientList []models.Client, taskList []mode
 func dashboardLatencyTaskID(point metric.AggregatePoint) (uint, bool) {
 	value, err := strconv.ParseUint(strings.TrimSpace(point.Tags["task_id"]), 10, 64)
 	return uint(value), err == nil && value > 0
-}
-
-func dashboardPreferredPingTaskID(clientUUID string, validTaskIDs map[uint]struct{}, tasks []models.PingTask) uint {
-	for _, task := range tasks {
-		if _, ok := validTaskIDs[task.Id]; ok && task.AppliesToClient(clientUUID) {
-			return task.Id
-		}
-	}
-	return 0
 }
 
 func dashboardLatencyMinuteAverages(points []metric.AggregatePoint, previousMinute, currentMinute time.Time) (float64, float64, bool) {

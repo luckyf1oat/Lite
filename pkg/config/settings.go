@@ -37,6 +37,7 @@ type Settings struct {
 	MCPDefaultDurationMin  int    `json:"mcp_default_duration_minutes" default:"30"`
 	MCPMaxDurationMin      int    `json:"mcp_max_duration_minutes" default:"1440"`
 	MCPMaxConcurrency      int    `json:"mcp_max_concurrency" default:"4"`
+	SessionTTLSeconds      int    `json:"session_ttl_seconds" default:"86400"`
 	// GeoIP 配置
 	GeoIpEnabled  bool   `json:"geo_ip_enabled" default:"true"`
 	GeoIpProvider string `json:"geo_ip_provider" default:"ipinfo"` // empty, mmdb, ip-api, geojs
@@ -103,6 +104,8 @@ const (
 	MCPDefaultDurationMinKey = "mcp_default_duration_minutes"
 	MCPMaxDurationMinKey     = "mcp_max_duration_minutes"
 	MCPMaxConcurrencyKey     = "mcp_max_concurrency"
+	SessionTTLSecondsKey     = "session_ttl_seconds"
+	SessionTTLCappedKey      = "session_ttl_capped_v1"
 	GeoIpEnabledKey          = "geo_ip_enabled"
 	GeoIpProviderKey         = "geo_ip_provider"
 	OAuthEnabledKey          = "o_auth_enabled"

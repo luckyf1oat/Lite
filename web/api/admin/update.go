@@ -38,9 +38,11 @@ func UpdateUser(c *gin.Context) {
 		api.RespondError(c, 400, "Username must be at least 3 characters long")
 		return
 	}
-	if req.Password != nil && len(*req.Password) < 6 {
-		api.RespondError(c, 400, "Password must be at least 6 characters long")
-		return
+	if req.Password != nil {
+		if err := accounts.ValidateNewPassword(*req.Password); err != nil {
+			api.RespondError(c, 400, err.Error())
+			return
+		}
 	}
 	if req.Password != nil {
 		c.Set("2fa_code", req.TwoFa)

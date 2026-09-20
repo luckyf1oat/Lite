@@ -88,8 +88,10 @@ type SQLiteOptions struct {
 	// BusyTimeout 会应用到 SQLite busy_timeout。
 	BusyTimeout time.Duration
 	// CacheSizeKB sets the SQLite page cache size in KB.
+	// Zero lets prepareSQLiteConfig fill a small default (4 MiB).
 	//
 	// CacheSizeKB 设置 SQLite 页缓存大小，单位为 KB。
+	// 零值由 prepareSQLiteConfig 填成较小的默认值（4 MiB）。
 	CacheSizeKB int
 	// ReadCacheSizeKB sets the page-cache budget for each dedicated read
 	// connection. Zero reuses CacheSizeKB for backward compatibility.
@@ -102,9 +104,11 @@ type SQLiteOptions struct {
 	//
 	// TempStoreMemory 启用基于内存的临时存储。
 	TempStoreMemory bool
-	// MMapSizeBytes sets SQLite mmap_size in bytes.
+	// MMapSizeBytes sets SQLite mmap_size in bytes. Zero disables mmap so
+	// pages live only in the page cache instead of also in a file mapping.
 	//
 	// MMapSizeBytes 设置 SQLite mmap_size，单位为字节。
+	// 零值关闭 mmap，热页只留在页缓存里，避免和映射区重复占 RSS。
 	MMapSizeBytes int64
 	// WALAutoCheckpoint sets the SQLite WAL auto-checkpoint page count.
 	//
@@ -176,9 +180,9 @@ func DefaultConfig(driver Driver, dsn string) Config {
 		SQLite: SQLiteOptions{
 			PerformanceProfile:    SQLiteProfileBalanced,
 			BusyTimeout:           5 * time.Second,
-			CacheSizeKB:           64 * 1024,
+			CacheSizeKB:           4 * 1024,
 			TempStoreMemory:       true,
-			MMapSizeBytes:         256 * 1024 * 1024,
+			MMapSizeBytes:         0,
 			WALAutoCheckpoint:     256,
 			JournalSizeLimitBytes: 1024 * 1024,
 		},

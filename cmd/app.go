@@ -136,6 +136,9 @@ func (a *App) Bootstrap() error {
 	if err := migrateAllowRemoteManagement(); err != nil {
 		return fmt.Errorf("failed to migrate remote management setting: %w", err)
 	}
+	if err := migrateSessionTTLCap(); err != nil {
+		return fmt.Errorf("failed to cap legacy session expiry: %w", err)
+	}
 	if err := mcp.InvalidateActiveLeases(); err != nil {
 		logger.Errorf("mcp", "Failed to invalidate leftover MCP leases after restart: %v", err)
 	}
@@ -193,6 +196,20 @@ func migrateAllowRemoteManagement() error {
 		return config.Set(config.AllowRemoteManagementKey, true)
 	}
 	return nil
+}
+
+func migrateSessionTTLCap() error {
+	all, err := config.GetAll()
+	if err != nil {
+		return err
+	}
+	if _, done := all[config.SessionTTLCappedKey]; done {
+		return nil
+	}
+	if err := accounts.CapLegacySessionExpires(accounts.SessionTTL()); err != nil {
+		return err
+	}
+	return config.Set(config.SessionTTLCappedKey, true)
 }
 
 func configValueAsInt(value any) (int, bool) {

@@ -21,6 +21,7 @@ var (
 	ErrOTPInvalid       = errors.New("Invalid 2FA code")
 	ErrSSOReauth        = errors.New("SSO accounts cannot use remote management until they re-authenticate")
 	ErrRateLimited      = errors.New("too many failed remote authorization attempts")
+	ErrPasskeyInvalid   = errors.New("passkey confirmation failed")
 )
 
 type rateBucket struct {
@@ -69,6 +70,27 @@ func Reauthorize(userUUID, password, otp, clientIP string) error {
 		}
 		recordFailure(userUUID, clientIP)
 		return ErrPasswordInvalid
+	}
+	clearPairFailures(userUUID, clientIP)
+	return nil
+}
+
+func ReauthorizePasskey(userUUID, clientIP string, verify func() error) error {
+	if userUUID == "" {
+		return ErrGrantPrincipal
+	}
+	if verify == nil {
+		return ErrPasskeyInvalid
+	}
+	if throttled(userUUID, clientIP) {
+		return ErrRateLimited
+	}
+	if err := verify(); err != nil {
+		if accounts.IsPasswordBusy(err) {
+			return err
+		}
+		recordFailure(userUUID, clientIP)
+		return ErrPasskeyInvalid
 	}
 	clearPairFailures(userUUID, clientIP)
 	return nil

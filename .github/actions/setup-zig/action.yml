@@ -29,3 +29,11 @@ runs:
       shell: bash
       run: |
         echo "$HOME/.cache/komari-zig/zig-x86_64-linux-${{ inputs.zig-version }}" >> "$GITHUB_PATH"
+
+    - name: Strip C debug from CGO objects
+      shell: bash
+      run: |
+        # go -ldflags -s -w only strips Go symbols. zig/gcc default CGO_CFLAGS
+        # still compile sqlite with -g, which is most of the Linux binary bulk.
+        echo "CGO_CFLAGS=-Os -g0" >> "$GITHUB_ENV"
+        echo "CGO_LDFLAGS=-s" >> "$GITHUB_ENV"

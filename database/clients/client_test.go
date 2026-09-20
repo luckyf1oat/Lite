@@ -381,6 +381,39 @@ func TestSaveClientPersistsTrafficResetDay(t *testing.T) {
 	assert.Equal(t, 1, *client.TrafficResetDay)
 }
 
+func TestSaveClientPersistsHKDCurrency(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "lite.db")
+	db, err := gorm.Open(sqlite.Open(databasePath), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.Client{}))
+	require.NoError(t, db.Create(&models.Client{
+		UUID: "client-hkd", Token: "token-hkd", Name: "Hong Kong Server", Currency: "$",
+	}).Error)
+
+	require.NoError(t, saveClient(db, map[string]interface{}{
+		"uuid":     "client-hkd",
+		"currency": " hk$ ",
+	}))
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	db, err = gorm.Open(sqlite.Open(databasePath), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	sqlDB, err = db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+
+	var client models.Client
+	require.NoError(t, db.First(&client, "uuid = ?", "client-hkd").Error)
+	assert.Equal(t, "HKD", client.Currency)
+}
+
 func TestSaveClientPersistsCADCurrency(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "lite.db")
 	db, err := gorm.Open(sqlite.Open(databasePath), &gorm.Config{

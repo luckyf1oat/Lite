@@ -84,28 +84,22 @@ runs:
           node -e "const t=JSON.parse(require('fs').readFileSync('Lite-theme.json','utf8')); if(!t.version) process.exit(1); console.log('Bundled Lite-theme version '+t.version)"
         )
 
-        install_theme() {
-          dest="$1"
-          rm -rf "$dest"
-          mkdir -p "$dest"
-          cp "$theme_dir/Lite-theme.json" "$dest/"
-          cp "$theme_dir/preview.png" "$dest/"
-          cp -r "$theme_dir/dist" "$dest/"
-        }
-        install_theme web/public/bundledThemes/Lite-theme
-        install_theme web/public/rescueTheme
+        dest="web/public/bundledThemes/Lite-theme"
+        rm -rf "$dest" web/public/rescueTheme
+        mkdir -p "$dest"
+        cp "$theme_dir/Lite-theme.json" "$dest/"
+        cp "$theme_dir/preview.png" "$dest/"
+        cp -r "$theme_dir/dist" "$dest/"
 
         grep -F '/system-assets/' web/public/systemUI/dist/index.html
         test -f web/public/bundledThemes/Lite-theme/Lite-theme.json
         test -f web/public/bundledThemes/Lite-theme/preview.png
         test -f web/public/bundledThemes/Lite-theme/dist/index.html
-        test -f web/public/rescueTheme/Lite-theme.json
-        test -f web/public/rescueTheme/preview.png
-        test -f web/public/rescueTheme/dist/index.html
-        test ! -e web/public/rescueTheme/komari-theme.json
+        test ! -e web/public/rescueTheme
+        test ! -e web/public/bundledThemes/Lite-theme/komari-theme.json
         test ! -e web/public/bundledThemes/nezha
-        grep -F '/favicon.png' web/public/rescueTheme/dist/index.html
-        grep -F '/assets/index.' web/public/rescueTheme/dist/index.html
+        grep -F '/favicon.png' web/public/bundledThemes/Lite-theme/dist/index.html
+        grep -F '/assets/index.' web/public/bundledThemes/Lite-theme/dist/index.html
 
     - name: Pack frontend artifact
       if: ${{ inputs.artifact-name != '' }}
@@ -113,7 +107,7 @@ runs:
       run: |
         set -euxo pipefail
         tar -czf "$RUNNER_TEMP/${{ inputs.artifact-name }}.tar.gz" -C web/public \
-          systemUI bundledThemes/Lite-theme rescueTheme
+          systemUI bundledThemes/Lite-theme
 
     - name: Upload frontend artifact
       if: ${{ inputs.artifact-name != '' }}

@@ -3,6 +3,7 @@ package jsonrpc
 import (
 	"context"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nuomiiiii/lite/database"
@@ -99,15 +100,24 @@ func publicGetMe(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcE
 	}
 	u := meta.User
 	return map[string]any{
-		"username":    u.Username,
-		"logged_in":   true,
-		"uuid":        u.UUID,
-		"sso_type":    u.SSOType,
-		"sso_id":      u.SSOID,
-		"2fa_enabled": u.TwoFactor != "",
-		"language":    u.Language,
-		"color":       u.Color,
+		"username":     u.Username,
+		"logged_in":    true,
+		"uuid":         u.UUID,
+		"sso_type":     u.SSOType,
+		"sso_id":       u.SSOID,
+		"2fa_enabled":  u.TwoFactor != "",
+		"has_password": u.Passwd != "",
+		"language":     u.Language,
+		"color":        u.Color,
+		"avatar_url":   accountAvatarURL(u.AvatarVersion),
 	}, nil
+}
+
+func accountAvatarURL(version string) string {
+	if strings.TrimSpace(version) == "" {
+		return ""
+	}
+	return "/api/admin/account/avatar/" + version
 }
 
 func publicGetClientRecentRecords(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {

@@ -62,3 +62,20 @@ func TestSQLiteInDirBuildsFileConfig(t *testing.T) {
 		t.Fatalf("unexpected sqlite dir dsn: %q", cfg.DSN)
 	}
 }
+
+func TestSQLiteDefaultsKeepCacheSmallAndDisableMmap(t *testing.T) {
+	cfg := DefaultConfig(DriverSQLite, "file:metrics.db")
+	if cfg.SQLite.CacheSizeKB != 4*1024 {
+		t.Fatalf("default sqlite cache = %d KiB, want 4 MiB", cfg.SQLite.CacheSizeKB)
+	}
+	if cfg.SQLite.MMapSizeBytes != 0 {
+		t.Fatalf("default sqlite mmap = %d, want 0", cfg.SQLite.MMapSizeBytes)
+	}
+	prepared, err := prepareSQLiteConfig(cfg)
+	if err != nil {
+		t.Fatalf("prepare sqlite config: %v", err)
+	}
+	if prepared.SQLite.CacheSizeKB != 4*1024 || prepared.SQLite.MMapSizeBytes != 0 {
+		t.Fatalf("prepared sqlite config inflated memory: cache=%d mmap=%d", prepared.SQLite.CacheSizeKB, prepared.SQLite.MMapSizeBytes)
+	}
+}

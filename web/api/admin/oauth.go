@@ -21,6 +21,21 @@ func BindingExternalAccount(c *gin.Context) {
 	c.Redirect(302, "/api/oauth")
 }
 
+func ConfirmPasskeyExternalAccount(c *gin.Context) {
+	session, _ := c.Cookie("session_token")
+	user, err := accounts.GetUserBySession(session)
+	if err != nil {
+		api.RespondError(c, 500, "No user found: "+err.Error())
+		return
+	}
+	if user.SSOID == "" {
+		api.RespondError(c, 400, "No bound SSO account")
+		return
+	}
+	c.SetCookie("passkey_confirm_account", user.UUID, 3600, "/", "", false, true)
+	c.Redirect(302, "/api/oauth")
+}
+
 func UnbindExternalAccount(c *gin.Context) {
 	session, _ := c.Cookie("session_token")
 	user, err := accounts.GetUserBySession(session)

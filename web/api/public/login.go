@@ -24,6 +24,10 @@ type LoginRequest struct {
 
 const sessionCookieMaxAge = 2592000
 
+func sessionCookieMaxAgeSeconds() int {
+	return accounts.SessionTTLSeconds()
+}
+
 func setSessionCookie(c *gin.Context, value string, maxAge int) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     "session_token",
@@ -89,12 +93,12 @@ func Login(c *gin.Context) {
 			return
 		}
 	}
-	session, err := accounts.CreateSession(uuid, sessionCookieMaxAge, c.Request.UserAgent(), c.ClientIP(), "password")
+	session, err := accounts.CreateSession(uuid, sessionCookieMaxAgeSeconds(), c.Request.UserAgent(), c.ClientIP(), "password")
 	if err != nil {
 		api.RespondError(c, http.StatusInternalServerError, "Failed to create session: "+err.Error())
 		return
 	}
-	setSessionCookie(c, session, sessionCookieMaxAge)
+	setSessionCookie(c, session, sessionCookieMaxAgeSeconds())
 	accounts.ClearLoginFailures(c.ClientIP(), data.Username)
 	auditlog.Log(c.ClientIP(), uuid, "logged in (password)", "login")
 	api.RespondSuccess(c, gin.H{})

@@ -1,6 +1,7 @@
 package remote
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/nuomiiiii/lite/utils"
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
 	"github.com/nuomiiiii/lite/web/api"
+	"github.com/nuomiiiii/lite/web/passkey"
 	"github.com/nuomiiiii/lite/web/remotectl"
 )
 
@@ -145,11 +147,13 @@ func Authorize(c *gin.Context) {
 		return
 	}
 	var request struct {
-		Password string `json:"password"`
-		OTP      string `json:"otp"`
-		TwoFA    string `json:"2fa_code"`
-		Scope    string `json:"scope"`
-		PageID   string `json:"page_id"`
+		Password   string          `json:"password"`
+		OTP        string          `json:"otp"`
+		TwoFA      string          `json:"2fa_code"`
+		CeremonyID string          `json:"ceremony_id"`
+		Credential json.RawMessage `json:"credential"`
+		Scope      string          `json:"scope"`
+		PageID     string          `json:"page_id"`
 	}
 	_ = c.ShouldBindJSON(&request)
 	otp := request.OTP
@@ -160,7 +164,15 @@ func Authorize(c *gin.Context) {
 	if scope == "" {
 		scope = remotectl.ScopeRemote
 	}
-	if err := remotectl.Reauthorize(principal.UserUUID, request.Password, otp, c.ClientIP()); err != nil {
+	var err error
+	if len(request.Credential) > 0 || request.CeremonyID != "" {
+		err = remotectl.ReauthorizePasskey(principal.UserUUID, c.ClientIP(), func() error {
+			return passkey.FinishUserAssertion(c, principal.UserUUID, request.CeremonyID, request.Credential)
+		})
+	} else {
+		err = remotectl.Reauthorize(principal.UserUUID, request.Password, otp, c.ClientIP())
+	}
+	if err != nil {
 		respondGrantError(c, err)
 		return
 	}

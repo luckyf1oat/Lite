@@ -30,6 +30,7 @@ func TestPublicGetMeReturnsAccountPreferences(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "zh-CN", account["language"])
 	require.Equal(t, "jade", account["color"])
+	require.Equal(t, false, account["has_password"])
 }
 
 func TestAccountPreferenceUpdateRequiresUserSession(t *testing.T) {

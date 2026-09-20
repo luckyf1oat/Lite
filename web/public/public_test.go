@@ -381,17 +381,59 @@ func TestCustomHTMLIsLimitedToPublicPages(t *testing.T) {
 
 func TestAdminApplicationPath(t *testing.T) {
 	tests := map[string]bool{
-		"/admin":         true,
-		"/admin/servers": true,
-		"/administrator": false,
-		"/terminal":      false,
-		"/install":       false,
-		"/manage":        false,
+		"/admin":           true,
+		"/admin/servers":   true,
+		"/admin/dashboard": true,
+		"/administrator":   false,
+		"/terminal":        false,
+		"/install":         false,
+		"/manage":          false,
 	}
 	for requestPath, want := range tests {
 		if got := isAdminApplicationPath(requestPath); got != want {
 			t.Fatalf("isAdminApplicationPath(%q) = %t, want %t", requestPath, got, want)
 		}
+	}
+}
+
+func TestLegacyAdminDashboardPath(t *testing.T) {
+	if !isLegacyAdminDashboardPath("/admin/dashboard") {
+		t.Fatal("expected /admin/dashboard to alias the admin home")
+	}
+	if !isLegacyAdminDashboardPath("/admin/dashboard/") {
+		t.Fatal("expected /admin/dashboard/ to alias the admin home")
+	}
+	if isLegacyAdminDashboardPath("/admin/settings/dashboard") {
+		t.Fatal("settings dashboard must not redirect")
+	}
+	if isLegacyAdminDashboardPath("/admin") {
+		t.Fatal("/admin is not a legacy dashboard path")
+	}
+}
+
+func TestLegacyAdminDashboardRedirectsToAdmin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	Static(router.Group("/"), router.NoRoute)
+
+	for _, requestPath := range []string{"/admin/dashboard", "/admin/dashboard/"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestPath, nil))
+		if recorder.Code != http.StatusFound {
+			t.Fatalf("GET %s status = %d, want %d", requestPath, recorder.Code, http.StatusFound)
+		}
+		if location := recorder.Header().Get("Location"); location != "/admin" {
+			t.Fatalf("GET %s Location = %q, want /admin", requestPath, location)
+		}
+	}
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/admin/dashboard?from=theme", nil))
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("GET /admin/dashboard?from=theme status = %d, want %d", recorder.Code, http.StatusFound)
+	}
+	if location := recorder.Header().Get("Location"); location != "/admin?from=theme" {
+		t.Fatalf("Location = %q, want /admin?from=theme", location)
 	}
 }
 
@@ -793,28 +835,28 @@ func TestStaticKeepsSystemUIAndPublicThemeResourcesIsolated(t *testing.T) {
 	}
 }
 
-func TestRescueThemeShipsLiteThemeManifest(t *testing.T) {
-	if _, err := fs.ReadFile(PublicFS, "rescueTheme/Lite-theme.json"); err != nil {
-		t.Fatalf("rescue Lite-theme.json: %v", err)
+func TestBundledLiteThemeIsThePublicRescueFallback(t *testing.T) {
+	if _, err := fs.ReadFile(PublicFS, "rescueTheme/dist/index.html"); err == nil {
+		t.Fatal("rescueTheme must not be embedded separately")
 	}
-	if _, err := fs.ReadFile(PublicFS, "rescueTheme/preview.png"); err != nil {
-		t.Fatalf("rescue preview.png: %v", err)
+	if _, err := fs.ReadFile(PublicFS, "bundledThemes/Lite-theme/Lite-theme.json"); err != nil {
+		t.Fatalf("bundled Lite-theme.json: %v", err)
 	}
 	if _, err := fs.ReadFile(PublicFS, "bundledThemes/Lite-theme/preview.png"); err != nil {
 		t.Fatalf("bundled preview.png: %v", err)
 	}
-	if _, err := fs.ReadFile(PublicFS, "rescueTheme/komari-theme.json"); err == nil {
-		t.Fatal("rescue theme still ships komari-theme.json")
+	if _, err := fs.ReadFile(PublicFS, "bundledThemes/Lite-theme/komari-theme.json"); err == nil {
+		t.Fatal("bundled theme still ships komari-theme.json")
 	}
-	index, err := fs.ReadFile(PublicFS, "rescueTheme/dist/index.html")
+	index, err := fs.ReadFile(PublicFS, "bundledThemes/Lite-theme/dist/index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(index), "/favicon.png") {
-		t.Fatal("rescue index is not Lite-Theme")
+		t.Fatal("bundled index is not Lite-Theme")
 	}
 	if !strings.Contains(string(index), `/assets/index.`) || !strings.Contains(string(index), ".js") {
-		t.Fatal("rescue index is not a Lite-Theme production build")
+		t.Fatal("bundled index is not a Lite-Theme production build")
 	}
 }
 

@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/nuomiiiii/lite/pkg/rpc"
 	"github.com/nuomiiiii/lite/web/api"
 	"github.com/nuomiiiii/lite/web/api/remote"
+	"github.com/nuomiiiii/lite/web/passkey"
 	"github.com/nuomiiiii/lite/web/remotectl"
 	"github.com/nuomiiiii/lite/web/security"
 )
@@ -258,12 +260,14 @@ func approveAuthorization(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Password        string   `json:"password"`
-		OTP             string   `json:"otp"`
-		TwoFA           string   `json:"2fa_code"`
-		TargetUUIDs     []string `json:"target_uuids"`
-		DurationMinutes any      `json:"duration_minutes"`
-		Note            string   `json:"note"`
+		Password        string          `json:"password"`
+		OTP             string          `json:"otp"`
+		TwoFA           string          `json:"2fa_code"`
+		CeremonyID      string          `json:"ceremony_id"`
+		Credential      json.RawMessage `json:"credential"`
+		TargetUUIDs     []string        `json:"target_uuids"`
+		DurationMinutes any             `json:"duration_minutes"`
+		Note            string          `json:"note"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		api.RespondError(c, http.StatusBadRequest, "invalid authorization request")
@@ -273,12 +277,20 @@ func approveAuthorization(c *gin.Context) {
 	if otp == "" {
 		otp = body.TwoFA
 	}
-	if err := remotectl.Reauthorize(principal.UserUUID, body.Password, otp, c.ClientIP()); err != nil {
+	var reauthErr error
+	if len(body.Credential) > 0 || body.CeremonyID != "" {
+		reauthErr = remotectl.ReauthorizePasskey(principal.UserUUID, c.ClientIP(), func() error {
+			return passkey.FinishUserAssertion(c, principal.UserUUID, body.CeremonyID, body.Credential)
+		})
+	} else {
+		reauthErr = remotectl.Reauthorize(principal.UserUUID, body.Password, otp, c.ClientIP())
+	}
+	if reauthErr != nil {
 		status := http.StatusForbidden
-		if remotectl.IsRateLimited(err) {
+		if remotectl.IsRateLimited(reauthErr) {
 			status = http.StatusTooManyRequests
 		}
-		api.RespondError(c, status, err.Error())
+		api.RespondError(c, status, reauthErr.Error())
 		return
 	}
 	if !mcpEnabled() || !remote.RemoteManagementEnabled() {

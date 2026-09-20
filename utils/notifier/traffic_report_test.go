@@ -169,6 +169,22 @@ func TestFormatTrafficReportLineIgnoresResetQuotaFields(t *testing.T) {
 	assert.NotContains(t, line, "3.00 KB")
 }
 
+func TestFormatTrafficReportTotalSumsDirectionsAndBilling(t *testing.T) {
+	assert.Equal(t,
+		"总计：上行 3.00 KB，下行 6.00 KB，计费流量 9.00 KB",
+		formatTrafficReportTotal(3*1024, 6*1024, 9*1024, true, true),
+	)
+	assert.Equal(t,
+		"总计：上行 1.00 KB，下行 2.00 KB",
+		formatTrafficReportTotal(1024, 2*1024, 3*1024, true, false),
+	)
+	assert.Equal(t,
+		"总计：计费流量 3.00 KB",
+		formatTrafficReportTotal(1024, 2*1024, 3*1024, false, true),
+	)
+	assert.Empty(t, formatTrafficReportTotal(1024, 2*1024, 3*1024, false, false))
+}
+
 func TestFormatTrafficReportLineExcludesBillingForFreeClients(t *testing.T) {
 	client := models.Client{Name: "free-server", Price: 0, TrafficLimitType: "sum"}
 	usage := trafficUsage{Up: 1024, Down: 2 * 1024}

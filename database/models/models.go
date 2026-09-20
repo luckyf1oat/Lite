@@ -86,9 +86,24 @@ type User struct {
 	TwoFactorCounter int64     `json:"-" gorm:"not null;default:0"`                        // Last accepted TOTP counter
 	Language         string    `json:"language,omitempty" gorm:"type:varchar(32);not null;default:''"`
 	Color            string    `json:"color,omitempty" gorm:"type:varchar(16);not null;default:''"`
+	AvatarVersion    string    `json:"avatar_version,omitempty" gorm:"type:varchar(64);not null;default:''"`
 	Sessions         []Session `json:"sessions,omitempty" gorm:"foreignKey:UUID;references:UUID;constraint:OnDelete:CASCADE,OnUpdate:CASCADE"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// PasskeyCredential stores a WebAuthn authenticator for one account.
+type PasskeyCredential struct {
+	ID                string     `json:"id" gorm:"type:varchar(36);primaryKey"`
+	UserUUID          string     `json:"user_uuid" gorm:"type:varchar(36);index;not null"`
+	RPID              string     `json:"rp_id" gorm:"type:varchar(255);uniqueIndex:ux_passkey_rp_credential;not null"`
+	CredentialID      string     `json:"credential_id" gorm:"type:varchar(512);uniqueIndex:ux_passkey_rp_credential;not null"`
+	Name              string     `json:"name" gorm:"type:varchar(100);not null"`
+	CredentialData    []byte     `json:"-" gorm:"type:blob;not null"`
+	AAGUID            string     `json:"aaguid,omitempty" gorm:"type:varchar(64);not null;default:''"`
+	CreatedAt         time.Time  `json:"created_at"`
+	LastUsedAt        *time.Time `json:"last_used_at"`
+	CreationUserAgent string     `json:"creation_user_agent" gorm:"type:text"`
 }
 
 // Session manages user sessions

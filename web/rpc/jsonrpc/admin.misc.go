@@ -17,7 +17,8 @@ import (
 	"github.com/nuomiiiii/lite/pkg/config"
 	"github.com/nuomiiiii/lite/pkg/rpc"
 	v2 "github.com/nuomiiiii/lite/protocol/v2"
-	agent 	"github.com/nuomiiiii/lite/web/agent"
+	logger "github.com/nuomiiiii/lite/utils/log"
+	agent "github.com/nuomiiiii/lite/web/agent"
 	"github.com/nuomiiiii/lite/web/mcp"
 	"github.com/nuomiiiii/lite/web/remotectl"
 )
@@ -73,11 +74,16 @@ func adminGetSessions(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.Jso
 	if err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to retrieve sessions: "+err.Error(), nil)
 	}
+	now := time.Now().UTC()
+	ttl := accounts.SessionTTL()
+	for i := range ss {
+		ss[i] = accounts.SessionForDisplay(ss[i], now, ttl)
+	}
 	current := ""
 	if meta := rpc.MetaFromContext(ctx); meta != nil && meta.SessionToken != "" {
 		current = accounts.SessionLookupKey(meta.SessionToken)
 	}
-	return map[string]any{"current": current, "data": ss}, nil
+	return map[string]any{"current": current, "data": ss, "server_time": now}, nil
 }
 
 func adminDeleteSession(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
@@ -179,6 +185,17 @@ func adminEditSettings(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 		}
 		cfg[config.AdminDefaultPageSizeKey] = pageSize
 	}
+	if rawTTL, ok := cfg[config.SessionTTLSecondsKey]; ok {
+		ttl, ok := normalizeSessionTTLSeconds(rawTTL)
+		if !ok {
+			return nil, rpc.MakeError(
+				rpc.InvalidParams,
+				"Session TTL must be an integer between 60 and 2592000 seconds",
+				nil,
+			)
+		}
+		cfg[config.SessionTTLSecondsKey] = ttl
+	}
 	// Ignore retired controls submitted by an older cached frontend. The
 	// startup normalizer keeps their persisted compatibility values fixed.
 	delete(cfg, config.LowResourceModeKey)
@@ -219,6 +236,18 @@ func adminEditSettings(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.
 
 	if err := config.SetMany(cfg); err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to update settings: "+err.Error(), nil)
+	}
+	if _, ok := cfg[config.SessionTTLSecondsKey]; ok {
+		if err := accounts.CapLegacySessionExpires(accounts.SessionTTL()); err != nil {
+			logger.Errorf("admin", "failed to cap session expiry after TTL update: %v", err)
+			return nil, rpc.MakeError(rpc.InternalError, "Failed to apply session timeout: "+err.Error(), nil)
+		}
+		if meta := rpc.MetaFromContext(ctx); meta != nil && meta.SessionToken != "" {
+			if _, _, err := accounts.TouchSession(meta.SessionToken, meta.UserAgent, meta.RemoteIP); err != nil {
+				logger.Errorf("admin", "failed to refresh current session after TTL update: %v", err)
+				return nil, rpc.MakeError(rpc.InternalError, "Failed to refresh current session: "+err.Error(), nil)
+			}
+		}
 	}
 	if raw, ok := cfg[config.AllowRemoteManagementKey]; ok && previousRemote && !toBool(raw, false) {
 		removed := agent.DrainRemoteDelivery(func() []agent.RemovedV2Event {
@@ -271,6 +300,18 @@ func normalizeAdminDefaultPageSize(raw any) (int, bool) {
 		return 0, false
 	}
 	return int(value), true
+}
+
+func normalizeSessionTTLSeconds(raw any) (int, bool) {
+	value, ok := raw.(float64)
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value {
+		return 0, false
+	}
+	seconds := int(value)
+	if seconds < accounts.MinSessionTTLSeconds || seconds > accounts.MaxSessionTTLSeconds {
+		return 0, false
+	}
+	return seconds, true
 }
 
 // mergedMetricConfig 读取当前持久化的 metric store 配置，并把本次请求中涉及的
@@ -378,8 +419,17 @@ func adminClearAllRecords(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc
 	return nil, nil
 }
 
+var humanSessionSettingKeys = []string{
+	config.CustomHeadKey,
+	config.CustomBodyKey,
+	config.ThemeKey,
+	config.DisablePasswordLoginKey,
+	config.OAuthEnabledKey,
+	config.OAuthProviderKey,
+}
+
 func settingsRequireHumanSession(cfg map[string]interface{}) bool {
-	for _, key := range []string{config.CustomHeadKey, config.CustomBodyKey, config.ThemeKey} {
+	for _, key := range humanSessionSettingKeys {
 		if _, ok := cfg[key]; ok {
 			return true
 		}

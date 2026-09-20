@@ -143,7 +143,7 @@ func (m *manager) start(token string) error {
 
 	binaryPath, installed := resolveBinaryPath()
 	if !installed {
-		return errors.New("cloudflared is not installed; install it manually or use the Docker image with built-in cloudflared")
+		return errors.New("cloudflared is not installed; install it yourself or set LITE_CLOUDFLARED_BIN")
 	}
 
 	cmd := exec.Command(binaryPath, "tunnel", "--no-autoupdate", "run")

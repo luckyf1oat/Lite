@@ -311,11 +311,10 @@ func prepareSQLiteConfig(cfg Config) (Config, error) {
 		cfg.SQLite.BusyTimeout = 5 * time.Second
 	}
 	if cfg.SQLite.CacheSizeKB == 0 {
-		cfg.SQLite.CacheSizeKB = 64 * 1024
+		cfg.SQLite.CacheSizeKB = 4 * 1024
 	}
-	if cfg.SQLite.MMapSizeBytes == 0 {
-		cfg.SQLite.MMapSizeBytes = 256 * 1024 * 1024
-	}
+	// MMapSizeBytes 0 disables mmap on purpose. Do not substitute a large
+	// mapping here: that reserved the whole metrics file (and more) in RSS.
 	if cfg.SQLite.WALAutoCheckpoint == 0 {
 		cfg.SQLite.WALAutoCheckpoint = 256
 	}

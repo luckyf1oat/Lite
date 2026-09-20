@@ -38,6 +38,9 @@ func registerPublicRoutes(r *gin.Engine) {
 
 	// 非 JSON / 特殊流程，保留 REST handler。
 	r.POST("/api/login", public_api.Login)
+	r.POST("/api/session/touch", api.RejectAPIKey(), public_api.TouchSession)
+	r.POST("/api/passkeys/login/options", public_api.PasskeyLoginOptions)
+	r.POST("/api/passkeys/login/verify", public_api.PasskeyLoginVerify)
 	r.GET("/api/logout", public_api.Logout)
 	r.GET("/api/oauth", public_api.OAuth)
 	r.GET("/api/oauth_callback", public_api.OAuthCallback)
@@ -105,6 +108,19 @@ func registerAdminRoutes(r *gin.Engine) {
 	g.POST("/update/user", api.RejectAPIKey(), admin.UpdateUser)
 	g.PUT("/update/favicon", admin.UploadFavicon)
 	g.POST("/update/favicon", admin.DeleteFavicon)
+	account := g.Group("/account")
+	account.Use(api.RejectAPIKey())
+	{
+		account.POST("/avatar", admin.UploadAccountAvatar)
+		account.GET("/avatar/:version", admin.GetAccountAvatar)
+		account.DELETE("/avatar", admin.DeleteAccountAvatar)
+		account.GET("/passkeys", admin.ListPasskeys)
+		account.POST("/passkeys/confirm/options", admin.PasskeyConfirmOptions)
+		account.POST("/passkeys/register/options", admin.PasskeyRegisterOptions)
+		account.POST("/passkeys/register/verify", admin.PasskeyRegisterVerify)
+		account.PATCH("/passkeys/:id", admin.RenamePasskey)
+		account.DELETE("/passkeys/:id", admin.DeletePasskey)
+	}
 	g.GET("/settings/https", admin.GetHTTPSSettings)
 	g.POST("/settings/https", admin.UpdateHTTPSSettings)
 	g.POST("/settings/https/reload", admin.ReloadHTTPSCertificate)
@@ -128,18 +144,21 @@ func registerAdminRoutes(r *gin.Engine) {
 		theme.POST("/market/install", admin.InstallThemeFromMarket)
 	}
 
-	// 2FA 含二维码 PNG / 敏感操作，保留 REST handler。
+	// 2FA 含二维码 PNG / 敏感操作，保留 REST handler。API Key 不能改登录验证。
 	twoFactor := g.Group("/2fa")
+	twoFactor.Use(api.RejectAPIKey())
 	{
 		twoFactor.GET("/generate", admin.Generate2FA)
 		twoFactor.POST("/enable", admin.Enable2FA)
 		twoFactor.POST("/disable", api.RequireSensitive2FA(), admin.Disable2FA)
 	}
 
-	// oauth2 绑定走重定向，保留 REST handler。
+	// oauth2 绑定走重定向，保留 REST handler。API Key 不能改登录绑定。
 	oauth2 := g.Group("/oauth2")
+	oauth2.Use(api.RejectAPIKey())
 	{
 		oauth2.GET("/bind", admin.BindingExternalAccount)
+		oauth2.GET("/confirm-passkey", admin.ConfirmPasskeyExternalAccount)
 		oauth2.POST("/unbind", admin.UnbindExternalAccount)
 	}
 
@@ -199,6 +218,7 @@ func registerAdminRoutes(r *gin.Engine) {
 		clientGroup.POST("/:uuid/billing/one-time", jsonRpc.Bind("admin:createBillingOneTimeFee", jsonRpc.WithPath("uuid")))
 		clientGroup.POST("/:uuid/remove", jsonRpc.Bind("admin:removeClient", jsonRpc.WithPath("uuid")))
 		clientGroup.GET("/:uuid/token", api.RejectAPIKey(), api.RequireSensitive2FA(), jsonRpc.Bind("admin:getClientToken", jsonRpc.WithPath("uuid"), jsonRpc.WithFlat()))
+		clientGroup.POST("/:uuid/token", api.RejectAPIKey(), api.RequireSensitive2FA(), jsonRpc.Bind("admin:getClientToken", jsonRpc.WithPath("uuid"), jsonRpc.WithFlat()))
 		clientGroup.GET("/:uuid/deployment-profile", jsonRpc.Bind("admin:getClientDeploymentProfile", jsonRpc.WithPath("uuid"), jsonRpc.WithRaw()))
 		clientGroup.POST("/:uuid/deployment-profile", jsonRpc.Bind("admin:saveClientDeploymentProfile", jsonRpc.WithPath("uuid"), jsonRpc.WithRaw()))
 		clientGroup.GET("/:uuid/traffic-calibration", admin.GetTrafficCalibration)

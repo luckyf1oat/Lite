@@ -2,6 +2,7 @@ package public
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
 
 	"github.com/gin-gonic/gin"
@@ -10,6 +11,7 @@ import (
 	"github.com/nuomiiiii/lite/pkg/config"
 	"github.com/nuomiiiii/lite/utils"
 	"github.com/nuomiiiii/lite/web/oauth"
+	"github.com/nuomiiiii/lite/web/passkey"
 )
 
 // /api/oauth
@@ -61,6 +63,14 @@ func OAuthCallback(c *gin.Context) {
 	}
 	oidcUser, err := oauth.CurrentProvider().OnCallback(c, state, queries, utils.GetCallbackURL(c))
 	if err != nil {
+		if _, bindErr := c.Cookie("binding_external_account"); bindErr == nil {
+			redirectOAuthAccountError(c, "oauth_error")
+			return
+		}
+		if _, confirmErr := c.Cookie("passkey_confirm_account"); confirmErr == nil {
+			redirectPasskeyConfirmError(c, "passkey_confirm_failed")
+			return
+		}
 		c.JSON(500, gin.H{"status": "error", "error": "Failed to get user info: " + err.Error()})
 		return
 	}
@@ -69,6 +79,7 @@ func OAuthCallback(c *gin.Context) {
 	sso_id := fmt.Sprintf("%s_%s", oauth.CurrentProvider().GetName(), oidcUser.UserId)
 
 	// 如果cookie中有binding_external_account，说明是绑定外部账号
+	// 否则如果是 passkey_confirm_account，说明是添加通行密钥时的 SSO 确认
 	// 否则是登录
 	uuid, _ := c.Cookie("binding_external_account")
 	c.SetCookie("binding_external_account", "", -1, "/", "", false, true)
@@ -77,16 +88,38 @@ func OAuthCallback(c *gin.Context) {
 		session, _ := c.Cookie("session_token")
 		user, err := accounts.GetUserBySession(session)
 		if err != nil || user.UUID != uuid {
-			c.JSON(500, gin.H{"status": "error", "message": "Binding failed"})
+			redirectOAuthAccountError(c, "bind_failed")
 			return
 		}
 		err = accounts.BindingExternalAccount(user.UUID, sso_id)
 		if err != nil {
-			c.JSON(500, gin.H{"status": "error", "message": "Binding failed"})
+			redirectOAuthAccountError(c, "bind_failed")
 			return
 		}
 		auditlog.Log(c.ClientIP(), user.UUID, "bound external account (OAuth)"+fmt.Sprintf(",sso_id: %s", sso_id), "login")
-		c.Redirect(302, "/admin")
+		c.Redirect(302, "/admin/settings/account-security?tab=github")
+		return
+	}
+
+	confirmUUID, _ := c.Cookie("passkey_confirm_account")
+	c.SetCookie("passkey_confirm_account", "", -1, "/", "", false, true)
+	if confirmUUID != "" {
+		session, _ := c.Cookie("session_token")
+		user, err := accounts.GetUserBySession(session)
+		sessionUUID := ""
+		boundSSID := ""
+		if err == nil {
+			sessionUUID = user.UUID
+			boundSSID = user.SSOID
+		}
+		if code := passkeySSOConfirmError(sessionUUID, confirmUUID, boundSSID, sso_id); code != "" {
+			redirectPasskeyConfirmError(c, code)
+			return
+		}
+		token := passkey.PutConfirmGrant(user.UUID)
+		c.SetCookie("passkey_confirm_ok", token, int(passkeyConfirmCookieSeconds), "/", "", false, true)
+		auditlog.Log(c.ClientIP(), user.UUID, "confirmed account via SSO for passkey", "info")
+		c.Redirect(302, "/admin/settings/account-security?tab=passkeys&passkey_confirm=ok")
 		return
 	}
 
@@ -101,14 +134,46 @@ func OAuthCallback(c *gin.Context) {
 	}
 
 	// 创建会话
-	session, err := accounts.CreateSession(user.UUID, sessionCookieMaxAge, c.Request.UserAgent(), c.ClientIP(), "oauth")
+	session, err := accounts.CreateSession(user.UUID, sessionCookieMaxAgeSeconds(), c.Request.UserAgent(), c.ClientIP(), "oauth")
 	if err != nil {
 		c.JSON(500, gin.H{"status": "error", "message": err.Error()})
 		return
 	}
 
 	// 设置cookie并返回
-	setSessionCookie(c, session, sessionCookieMaxAge)
+	setSessionCookie(c, session, sessionCookieMaxAgeSeconds())
 	auditlog.Log(c.ClientIP(), user.UUID, "logged in (OAuth)", "login")
 	c.Redirect(302, "/admin")
+}
+
+func redirectOAuthAccountError(c *gin.Context, code string) {
+	switch code {
+	case "bind_failed", "oauth_denied", "oauth_error":
+	default:
+		code = "oauth_error"
+	}
+	c.Redirect(302, "/admin/settings/account-security?tab=github&oauth_error="+url.QueryEscape(code))
+}
+
+const passkeyConfirmCookieSeconds = 300
+
+func passkeySSOConfirmError(sessionUUID, cookieUUID, boundSSID, callbackSSID string) string {
+	if sessionUUID == "" || cookieUUID == "" || sessionUUID != cookieUUID {
+		return "passkey_confirm_failed"
+	}
+	if boundSSID == "" || boundSSID != callbackSSID {
+		return "passkey_confirm_mismatch"
+	}
+	return ""
+}
+
+func redirectPasskeyConfirmError(c *gin.Context, code string) {
+	switch code {
+	case "passkey_confirm_failed", "passkey_confirm_mismatch":
+	default:
+		code = "passkey_confirm_failed"
+	}
+	c.SetCookie("passkey_confirm_account", "", -1, "/", "", false, true)
+	c.SetCookie("passkey_confirm_ok", "", -1, "/", "", false, true)
+	c.Redirect(302, "/admin/settings/account-security?tab=passkeys&oauth_error="+url.QueryEscape(code))
 }

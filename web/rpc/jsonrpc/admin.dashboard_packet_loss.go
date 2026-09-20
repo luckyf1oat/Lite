@@ -188,7 +188,7 @@ func decorateDashboardNavigation(result dashboardChartsResponse) dashboardCharts
 	result.Latency.Ranking = append([]dashboardLatencyRankItem(nil), result.Latency.Ranking...)
 	for index := range result.Latency.Ranking {
 		item := &result.Latency.Ranking[index]
-		item.DetailURL = navigation.ServerNetworkURL(item.UUID)
+		item.DetailURL = navigation.ServerDetailURL(item.UUID, item.TaskID)
 	}
 	for index := range result.Latency.JitterRanking {
 		item := &result.Latency.JitterRanking[index]

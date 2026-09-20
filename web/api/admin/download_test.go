@@ -111,7 +111,7 @@ func TestSanitizeConfigSnapshotKeepsServersAndTasksWithoutHistory(t *testing.T) 
 	}
 }
 
-func TestBuildBackupArchiveUsesUpstreamCompatibleRootLayout(t *testing.T) {
+func TestBuildBackupArchiveUsesLiteRootLayout(t *testing.T) {
 	content := t.TempDir()
 	if err := os.WriteFile(filepath.Join(content, "lite.db"), []byte("main"), 0o600); err != nil {
 		t.Fatal(err)
@@ -136,6 +136,9 @@ func TestBuildBackupArchiveUsesUpstreamCompatibleRootLayout(t *testing.T) {
 		if !found[name] {
 			t.Fatalf("archive missing %s: %#v", name, found)
 		}
+	}
+	if found["komari.db"] || found["komari-backup-markup"] {
+		t.Fatalf("Lite backup must not ship Komari restore names: %#v", found)
 	}
 }
 
@@ -162,6 +165,9 @@ func TestBuildConfigurationArchiveDoesNotContainMetricHistory(t *testing.T) {
 	}
 	if found["metrics.db"] || found["metrics.db-wal"] || found["metrics.db-shm"] {
 		t.Fatalf("configuration archive contains metric history: %#v", found)
+	}
+	if found["komari.db"] || found["komari-backup-markup"] {
+		t.Fatalf("configuration archive must not be importable by upstream Komari: %#v", found)
 	}
 }
 

@@ -126,7 +126,7 @@ func TestDashboardNavigationFollowsThirdPartyThemeManifest(t *testing.T) {
 		PacketLoss: dashboardPacketLossSummary{Ranking: []dashboardPacketLossRankItem{{UUID: uuid, TaskID: 7}}},
 	})
 	assert.Equal(t, detailURL, charts.Traffic.Ranking[0].DetailURL)
-	assert.Equal(t, detailURL+"?tab=network", charts.Latency.Ranking[0].DetailURL)
+	assert.Equal(t, detailURL+"?task=5", charts.Latency.Ranking[0].DetailURL)
 	assert.Equal(t, detailURL+"?task=6", charts.Latency.JitterRanking[0].DetailURL)
 	assert.Equal(t, detailURL+"?task=7", charts.PacketLoss.Ranking[0].DetailURL)
 
@@ -154,15 +154,6 @@ func TestDashboardNavigationFollowsThirdPartyThemeManifest(t *testing.T) {
 	assert.Equal(t, "/instance/node-a", legacy.PacketLoss.Ranking[0].DetailURL)
 }
 
-func TestDashboardPreferredPingTaskIDUsesTaskWeightOrder(t *testing.T) {
-	tasks := []models.PingTask{
-		{Id: 9, Clients: models.StringArray{"node-a"}, Weight: 1},
-		{Id: 3, Clients: models.StringArray{"node-a"}, Weight: 2},
-	}
-	assert.Equal(t, uint(9), dashboardPreferredPingTaskID("node-a", map[uint]struct{}{3: {}, 9: {}}, tasks))
-	assert.Zero(t, dashboardPreferredPingTaskID("node-b", map[uint]struct{}{3: {}, 9: {}}, tasks))
-}
-
 func TestBuildDashboardStorageUsesNewestCompactionTime(t *testing.T) {
 	older := time.Date(2026, 7, 31, 6, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Hour)
@@ -185,6 +176,34 @@ func TestBuildDashboardStorageUsesNewestCompactionTime(t *testing.T) {
 	if summary.LastCompactedAt == nil || !summary.LastCompactedAt.Equal(newer) {
 		t.Fatalf("last compaction = %v, want %v", summary.LastCompactedAt, newer)
 	}
+}
+
+func TestSummarizeDashboardLatencyRankingRanksEachTask(t *testing.T) {
+	clients := []models.Client{
+		{UUID: "node-a", Name: "Alpha"},
+		{UUID: "node-b", Name: "Beta"},
+	}
+	tasks := []models.PingTask{
+		{Id: 1, Name: "Cloudflare", Clients: models.StringArray{"node-a", "node-b"}},
+		{Id: 2, Name: "Google DNS", Clients: models.StringArray{"node-a"}},
+	}
+	ranking := summarizeDashboardLatencyRanking(clients, tasks, []metric.AggregatePoint{
+		{EntityID: "node-a", Value: 10, Count: 1, Tags: map[string]string{"task_id": "1"}},
+		{EntityID: "node-a", Value: 30, Count: 1, Tags: map[string]string{"task_id": "1"}},
+		{EntityID: "node-a", Value: 40, Count: 1, Tags: map[string]string{"task_id": "2"}},
+		{EntityID: "node-b", Value: 50, Count: 1, Tags: map[string]string{"task_id": "1"}},
+		{EntityID: "node-b", Value: 5, Count: 1, Tags: map[string]string{"task_id": "9"}},
+	}, 0)
+	require.Len(t, ranking, 3)
+	assert.Equal(t, "Beta", ranking[0].Name)
+	assert.Equal(t, "Cloudflare", ranking[0].TaskName)
+	assert.InDelta(t, 50, ranking[0].Average, 0.001)
+	assert.Equal(t, "Alpha", ranking[1].Name)
+	assert.Equal(t, "Google DNS", ranking[1].TaskName)
+	assert.InDelta(t, 40, ranking[1].Average, 0.001)
+	assert.Equal(t, "Alpha", ranking[2].Name)
+	assert.Equal(t, "Cloudflare", ranking[2].TaskName)
+	assert.InDelta(t, 20, ranking[2].Average, 0.001)
 }
 
 func TestDashboardLatencyMinuteAveragesAndJitterRanking(t *testing.T) {

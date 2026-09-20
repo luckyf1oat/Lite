@@ -196,6 +196,8 @@ func sendTrafficReport(daily, weekly, monthly, currentDaily bool) (TrafficReport
 	var lines []string
 	eventClients := make([]models.Client, 0, len(targets))
 	var lastClientError error
+	var totalUp, totalDown, totalBilled int64
+	var includeTrafficTotal, includeBillingTotal bool
 	for _, target := range targets {
 		if !target.hasReportContent() {
 			continue
@@ -217,6 +219,15 @@ func sendTrafficReport(daily, weekly, monthly, currentDaily bool) (TrafficReport
 		if line == "" {
 			continue
 		}
+		if target.notification.IncludeTraffic {
+			totalUp += usage.Up
+			totalDown += usage.Down
+			includeTrafficTotal = true
+		}
+		if target.notification.IncludeBilling && target.client.Price > 0 {
+			totalBilled += billedTrafficUsage(target.client, usage)
+			includeBillingTotal = true
+		}
 		lines = append(lines, line)
 		eventClients = append(eventClients, target.client)
 	}
@@ -226,6 +237,9 @@ func sendTrafficReport(daily, weekly, monthly, currentDaily bool) (TrafficReport
 			return result, fmt.Errorf("compute traffic report: %w", lastClientError)
 		}
 		return result, nil
+	}
+	if total := formatTrafficReportTotal(totalUp, totalDown, totalBilled, includeTrafficTotal, includeBillingTotal); total != "" {
+		lines = append(lines, total)
 	}
 
 	message := strings.Join(lines, "\n")
@@ -288,6 +302,20 @@ func previousTrafficReportRange(now time.Time, period string) (time.Time, time.T
 
 type trafficUsage = trafficledger.Usage
 
+func trafficBillingRule(client models.Client) string {
+	rule := strings.ToLower(strings.TrimSpace(client.TrafficLimitType))
+	switch rule {
+	case "up", "down", "sum", "min", "max":
+		return rule
+	default:
+		return "sum"
+	}
+}
+
+func billedTrafficUsage(client models.Client, usage trafficUsage) int64 {
+	return computeUsedByType(trafficBillingRule(client), usage.Up, usage.Down)
+}
+
 func formatTrafficReportLine(client models.Client, suffix string, usage trafficUsage, includeTraffic, includeBilling bool) string {
 	name := strings.TrimSpace(client.Name)
 	if name == "" {
@@ -298,19 +326,27 @@ func formatTrafficReportLine(client models.Client, suffix string, usage trafficU
 		parts = append(parts, "上行 "+humanBytes(usage.Up), "下行 "+humanBytes(usage.Down))
 	}
 	if includeBilling && client.Price > 0 {
-		rule := strings.ToLower(strings.TrimSpace(client.TrafficLimitType))
-		switch rule {
-		case "up", "down", "sum", "min", "max":
-		default:
-			rule = "sum"
-		}
-		used := computeUsedByType(rule, usage.Up, usage.Down)
-		parts = append(parts, fmt.Sprintf("计费流量 %s（%s）", humanBytes(used), rule))
+		rule := trafficBillingRule(client)
+		parts = append(parts, fmt.Sprintf("计费流量 %s（%s）", humanBytes(billedTrafficUsage(client, usage)), rule))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return fmt.Sprintf("%s %s：%s", name, suffix, strings.Join(parts, "，"))
+}
+
+func formatTrafficReportTotal(totalUp, totalDown, totalBilled int64, includeTraffic, includeBilling bool) string {
+	parts := make([]string, 0, 3)
+	if includeTraffic {
+		parts = append(parts, "上行 "+humanBytes(totalUp), "下行 "+humanBytes(totalDown))
+	}
+	if includeBilling {
+		parts = append(parts, "计费流量 "+humanBytes(totalBilled))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "总计：" + strings.Join(parts, "，")
 }
 
 // getClientTrafficInRange 查询某客户端在指定时间段内的上下行流量增量。

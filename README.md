@@ -9,7 +9,7 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 
 本项目基于 [komari-monitor/komari](https://github.com/komari-monitor/komari) 持续开发，重点改善低配置主控上的数据库占用、历史查询和维护负载，同时提供流量管理、成本中心、备份迁移、接入安全与适配电脑和手机的管理界面。
 
-**当前正式版：Lite [`2.3.3`](https://github.com/nuomiiiii/Lite/releases/tag/2.3.3) · 配套 Agent [`2.3.3.1`](https://github.com/nuomiiiii/Lite-agent/releases/tag/2.3.3.1) · 默认主题 [`1.1.2`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.1.2)**
+**当前正式版：Lite [`2.3.4`](https://github.com/nuomiiiii/Lite/releases/tag/2.3.4) · 配套 Agent [`2.3.3.3`](https://github.com/nuomiiiii/Lite-agent/releases/tag/2.3.3.3) · 默认主题 [`1.1.2`](https://github.com/nuomiiiii/Lite-theme/releases/tag/v1.1.2)**
 
 > [!IMPORTANT]
 > 系统 Web UI 与公开大屏主题独立：Lite Web 负责管理后台、远程终端等系统页面，主题只影响公开大屏。默认和保底主题都是 [Lite-Theme](https://github.com/nuomiiiii/Lite-theme)，可独立更新，并在已有其他可用主题时删除；主题管理始终要求至少保留一个可用主题。原经典主题已拆分为独立的 [lite-Classic](https://github.com/nuomiiiii/lite-Classic)，不再随 Lite 内置。从 Nezha / 旧默认主题升级时会迁到 Lite-Theme。
@@ -19,14 +19,14 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 > [!WARNING]
 > Lite 只能部署在你拥有或已获得授权管理的设备上。请勿将其用于未经授权的访问、持久化、命令执行或其他滥用行为。管理员应启用 HTTPS 与双因素认证，并妥善保护 Agent Token 和备份文件。
 
-## 2.3.3 稳定版能力摘要
+## 2.3.4 稳定版能力摘要
 
+- **通行密钥**：可在账户管理中添加 Windows Hello 或密码管理器通行密钥；登录、远程终端、远程执行、MCP 授权、部署节点和重置 Token 都可用通行密钥验证。
+- **自动登出**：可设置 1 分钟到 30 天的无操作超时，默认 24 小时；本站所有登录会话使用同一条规则。
+- **账户与站点设置**：管理后台改为左右分栏卡片，二级功能在弹出层中完成；支持头像、自动登出和站点 API 密钥管理。
+- **账单港币**：账单支持港币（HK$）录入；成本中心仍展示人民币和美元，并按实时汇率换算。
 - **MCP 代理**：连接 AI 客户端后，选择服务器与授权时长，即可临时开放命令执行、交互终端和文件读写；支持查看操作记录、导出记录与撤销授权。
-- **远程管理体验优化**：远程管理界面与管理后台采用统一的 UI 风格，并优化了会话管理、文件操作及移动端使用体验。
-- **仪表盘流量统计**：新增近 30 天计费流量与日均用量摘要，点击每日计费流量柱形图可查看当天各服务器的上传、下载与计费用量，并搜索、排序。
-- **软路由部署与更新**：Linux 安装脚本同时支持 systemd 和 OpenWrt / iStoreOS 的 procd；符合条件的直装实例可使用后台“立即更新”，并在更新失败时尝试回退。
-- **节点与账单管理**：节点列表支持重置 Token，地区筛选补齐澳门；一次性费用、流量重置和更换 IP 支持录入 `0` 金额，账单按服务器当前名称显示和搜索。
-- **配套组件更新**：Lite-agent `2.3.3.1` 提供 MCP 完整管理能力；默认 Lite-Theme `1.1.2` 包含手机端显示优化，保留丢包率、探测时间范围和带宽等显示设置。
+- **配套组件更新**：Lite-agent `2.3.3.3` 提供 MCP 完整管理和内存优化；默认 Lite-Theme `1.1.2` 包含手机端显示优化。
 
 ## 功能概览
 
@@ -76,7 +76,7 @@ docker run -d \
   ghcr.io/nuomiiiii/lite:latest
 ```
 
-固定使用当前正式版时，将镜像标签改为 `ghcr.io/nuomiiiii/lite:2.3.3`。
+固定使用当前正式版时，将镜像标签改为 `ghcr.io/nuomiiiii/lite:2.3.4`。
 
 更新 Docker 部署前请先备份 `data` 目录，然后拉取新镜像并使用原来的端口和数据挂载重新创建容器：
 
@@ -106,9 +106,9 @@ chmod +x Lite-linux-amd64
 
 ## Agent 与远程管理
 
-Lite `2.3.3` 推荐配套 [Lite-agent `2.3.3.1`](https://github.com/nuomiiiii/Lite-agent/releases/tag/2.3.3.1)。先在后台添加节点，再打开该节点的“节点配置 → 部署指令”，复制完整命令到目标服务器执行。自动发现注册已下线，新安装和 Docker 重建均使用具体节点的部署指令。
+Lite `2.3.4` 推荐配套 [Lite-agent `2.3.3.3`](https://github.com/nuomiiiii/Lite-agent/releases/tag/2.3.3.3)。先在后台添加节点，再打开该节点的“节点配置 → 部署指令”，复制完整命令到目标服务器执行。自动发现注册已下线，新安装和 Docker 重建均使用具体节点的部署指令。
 
-远程终端、文件管理和远程执行需要同时开启 Lite“系统设置 → 通用 → 允许远程管理”与 Agent 本地 `--enable-remote-control`，新安装默认关闭。进入远程功能时，已启用两步验证的账号输入当前验证码，未启用时重新输入管理员密码。
+远程终端、文件管理和远程执行需要同时开启 Lite“系统设置 → 通用 → 允许远程管理”与 Agent 本地 `--enable-remote-control`，新安装默认关闭。进入远程功能时，已启用通行密钥的账号可用通行密钥验证；已启用两步验证但未使用通行密钥时输入当前验证码；未启用时重新输入管理员密码。
 
 在线配置支持采集间隔、流量重置日、网卡、挂载点、内存缓存计入方式与 GPU 监控的保存、下发和结果确认。远程控制开关等安装选项需要更新节点本地启动参数并重启或重新安装 Agent。安装、日志、更新和卸载步骤见[Agent 安装与维护](https://nuomiiiii.github.io/Lite-document/install/agent)，操作方式见[远程终端与文件](https://nuomiiiii.github.io/Lite-document/remote/terminal)。
 
@@ -116,7 +116,7 @@ Lite `2.3.3` 推荐配套 [Lite-agent `2.3.3.1`](https://github.com/nuomiiiii/Li
 
 1. 使用配套 Lite-agent，并开启上述站点和 Agent 远程控制开关，再开启“系统设置 → 通用 → 启用 MCP 代理”。
 2. 进入“远程管理 → MCP 代理”，复制服务地址，例如 `https://monitor.example.com/mcp`，添加到支持浏览器授权的 AI 客户端。
-3. 客户端发起连接后，在 Lite 中选择允许管理的服务器、授权时长与可选备注，输入管理员密码或两步验证码，点击“授权并连接”。
+3. 客户端发起连接后，在 Lite 中选择允许管理的服务器、授权时长与可选备注，输入管理员密码、两步验证码或通行密钥，点击“授权并连接”。
 4. 回到 AI 客户端执行操作；在 Lite 的“授权详情”和“操作记录”中查看状态、导出记录或撤销授权。
 
 MCP 默认关闭，默认授权时长为 30 分钟，最长 24 小时。在授权范围内，AI 以 Agent 运行账户的权限执行命令、使用终端和读写文件，Lite 不会逐次确认。到期或撤销会结束相关访问，已完成的修改不会自动回滚。详细配置与排查见[MCP 代理与 AI 授权手册](https://nuomiiiii.github.io/Lite-document/remote/mcp)。
