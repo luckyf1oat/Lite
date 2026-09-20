@@ -138,12 +138,13 @@ func adminEditClient(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.Js
 	if err := clients.SaveClient(update); err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, err.Error(), nil)
 	}
-	if _, changed := update["traffic_reset_day"]; changed {
+	_, dayChanged := update["traffic_reset_day"]
+	_, timeChanged := update["traffic_reset_time"]
+	_, tzChanged := update["traffic_reset_timezone"]
+	if dayChanged || timeChanged || tzChanged {
 		if clientInfo, err := clients.GetClientByUUID(uuid); err == nil && clientInfo.TrafficResetDay != nil {
-			monthRotate := *clientInfo.TrafficResetDay
-			agent_runtime.DispatchV2Event(uuid, v2.MethodAgentConfig, v2.ConfigParams{
-				MonthRotate: &monthRotate,
-			})
+			config := clients.AgentMonthRotateConfig(clientInfo)
+			agent_runtime.DispatchV2Event(uuid, v2.MethodAgentConfig, config)
 		}
 	}
 	actor, ip := auditActor(ctx)

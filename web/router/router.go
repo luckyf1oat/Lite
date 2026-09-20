@@ -243,7 +243,7 @@ func registerAdminRoutes(r *gin.Engine) {
 		session.POST("/remove/all", jsonRpc.Bind("admin:deleteAllSessions"))
 	}
 
-	g.GET("/logs", jsonRpc.Bind("admin:getLogs", jsonRpc.WithQuery("limit", "page")))
+	g.GET("/logs", jsonRpc.Bind("admin:getLogs", jsonRpc.WithQuery("limit", "page", "q", "msg_type", "day")))
 
 	mcp.RegisterAdmin(g)
 

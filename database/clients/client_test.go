@@ -381,6 +381,29 @@ func TestSaveClientPersistsTrafficResetDay(t *testing.T) {
 	assert.Equal(t, 1, *client.TrafficResetDay)
 }
 
+func TestSaveClientPersistsTrafficResetClockAndTimezone(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:client-reset-clock?mode=memory&cache=shared"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.Client{}))
+	require.NoError(t, db.Create(&models.Client{UUID: "node-a", Token: "token-a", Name: "A"}).Error)
+
+	require.NoError(t, saveClient(db, map[string]interface{}{
+		"uuid":                    "node-a",
+		"traffic_reset_day":       float64(15),
+		"traffic_reset_time":      "12:38:12",
+		"traffic_reset_timezone":  "UTC",
+	}))
+
+	var client models.Client
+	require.NoError(t, db.First(&client, "uuid = ?", "node-a").Error)
+	require.NotNil(t, client.TrafficResetDay)
+	assert.Equal(t, 15, *client.TrafficResetDay)
+	assert.Equal(t, "12:38:12", client.TrafficResetTime)
+	assert.Equal(t, "UTC", client.TrafficResetTimezone)
+}
+
 func TestSaveClientPersistsHKDCurrency(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "lite.db")
 	db, err := gorm.Open(sqlite.Open(databasePath), &gorm.Config{

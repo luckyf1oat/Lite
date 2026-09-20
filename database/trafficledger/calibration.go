@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nuomiiiii/lite/database/models"
+	"github.com/nuomiiiii/lite/pkg/trafficreset"
 	"gorm.io/gorm"
 )
 
@@ -54,19 +55,17 @@ type calibratedCycleCacheState struct {
 
 var calibratedCycleCache calibratedCycleCacheState
 
-func daysInTrafficMonth(year int, month time.Month) int {
-	return time.Date(year, month+1, 0, 0, 0, 0, 0, BeijingLocation).Day()
-}
-
-func trafficCycleBoundary(year int, month time.Month, resetDay int) time.Time {
-	if last := daysInTrafficMonth(year, month); resetDay > last {
-		resetDay = last
-	}
-	return time.Date(year, month, resetDay, 0, 0, 0, 0, BeijingLocation)
-}
-
 func trafficCycleInclusiveEnd(start time.Time, resetDay int) time.Time {
 	return NextCycleStart(start, resetDay).AddDate(0, 0, -1)
+}
+
+func clientSchedule(client models.Client) trafficreset.Schedule {
+	return trafficreset.FromFields(client.TrafficResetDay, client.TrafficResetTime, client.TrafficResetTimezone)
+}
+
+func scheduleForDay(resetDay int) trafficreset.Schedule {
+	day := resetDay
+	return trafficreset.FromFields(&day, "", "")
 }
 
 func NormalizedResetDay(resetDay *int) int {
@@ -77,38 +76,24 @@ func NormalizedResetDay(resetDay *int) int {
 }
 
 func CycleContaining(resetDay int, at time.Time) time.Time {
-	if resetDay < 1 || resetDay > 31 {
-		resetDay = 1
-	}
-	local := at.In(BeijingLocation)
-	start := trafficCycleBoundary(local.Year(), local.Month(), resetDay)
-	if local.Before(start) {
-		previous := local.AddDate(0, -1, 0)
-		start = trafficCycleBoundary(previous.Year(), previous.Month(), resetDay)
-	}
-	return start
+	return scheduleForDay(resetDay).Last(at)
 }
 
 func NextCycleStart(start time.Time, resetDay int) time.Time {
-	if resetDay < 1 || resetDay > 31 {
-		resetDay = 1
-	}
-	local := start.In(BeijingLocation)
-	nextMonth := time.Date(local.Year(), local.Month()+1, 1, 0, 0, 0, 0, BeijingLocation)
-	return trafficCycleBoundary(nextMonth.Year(), nextMonth.Month(), resetDay)
+	return scheduleForDay(resetDay).Next(start)
 }
 
 func CurrentTrafficCycle(resetDay *int, now time.Time) (time.Time, string, error) {
-	if resetDay == nil || *resetDay < 1 || *resetDay > 31 {
+	return CurrentTrafficCycleFor(models.Client{TrafficResetDay: resetDay}, now)
+}
+
+func CurrentTrafficCycleFor(client models.Client, now time.Time) (time.Time, string, error) {
+	schedule := clientSchedule(client)
+	if !schedule.Active() {
 		return time.Time{}, "", fmt.Errorf("traffic reset day must be configured before calibration")
 	}
-	local := now.In(BeijingLocation)
-	start := trafficCycleBoundary(local.Year(), local.Month(), *resetDay)
-	if local.Before(start) {
-		previous := local.AddDate(0, -1, 0)
-		start = trafficCycleBoundary(previous.Year(), previous.Month(), *resetDay)
-	}
-	return start, start.Format(time.DateOnly), nil
+	start := schedule.Last(now)
+	return start, schedule.CycleKey(now), nil
 }
 
 func calibrationAppliesToCurrentCycle(resetDay *int, cycle string, now time.Time) bool {
@@ -135,7 +120,7 @@ func LoadCalibrationSnapshot(ctx context.Context, db *gorm.DB, client models.Cli
 }
 
 func loadCalibrationDays(ctx context.Context, db *gorm.DB, client models.Client, now time.Time) ([]calibrationDay, CalibrationSnapshot, error) {
-	cycleStart, cycle, err := CurrentTrafficCycle(client.TrafficResetDay, now)
+	cycleStart, cycle, err := CurrentTrafficCycleFor(client, now)
 	if err != nil {
 		return nil, CalibrationSnapshot{}, err
 	}
@@ -424,7 +409,7 @@ func CurrentCalibratedCycleUsages(ctx context.Context, db *gorm.DB, now time.Tim
 		ids = append(ids, ref.Client)
 	}
 	var clients []models.Client
-	if err := db.WithContext(ctx).Select("uuid", "traffic_reset_day").Where("uuid IN ?", ids).Find(&clients).Error; err != nil {
+	if err := db.WithContext(ctx).Select("uuid", "traffic_reset_day", "traffic_reset_time", "traffic_reset_timezone").Where("uuid IN ?", ids).Find(&clients).Error; err != nil {
 		return nil, fmt.Errorf("load calibrated clients: %w", err)
 	}
 	cycles := make(map[string][]string, len(refs))
@@ -435,7 +420,7 @@ func CurrentCalibratedCycleUsages(ctx context.Context, db *gorm.DB, now time.Tim
 	for _, client := range clients {
 		active := false
 		for _, cycle := range cycles[client.UUID] {
-			if calibrationAppliesToCurrentCycle(client.TrafficResetDay, cycle, now) {
+			if _, current, err := CurrentTrafficCycleFor(client, now); err == nil && current == cycle {
 				active = true
 				break
 			}

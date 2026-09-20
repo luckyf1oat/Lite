@@ -7,10 +7,9 @@ import (
 	"time"
 
 	"github.com/nuomiiiii/lite/database/models"
+	"github.com/nuomiiiii/lite/pkg/trafficreset"
 	"gorm.io/gorm"
 )
-
-var trafficCycleLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 func normalizeTrafficType(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
@@ -22,33 +21,17 @@ func normalizeTrafficType(value string) (string, error) {
 	}
 }
 
-func daysInMonth(year int, month time.Month) int {
-	return time.Date(year, month+1, 0, 0, 0, 0, 0, trafficCycleLocation).Day()
-}
-
-func cycleBoundary(year int, month time.Month, resetDay int) time.Time {
-	if last := daysInMonth(year, month); resetDay > last {
-		resetDay = last
-	}
-	return time.Date(year, month, resetDay, 0, 0, 0, 0, trafficCycleLocation)
-}
-
 func currentTrafficCycle(resetDay *int, now time.Time) string {
-	if resetDay == nil || *resetDay < 1 || *resetDay > 31 {
-		return ""
-	}
-	local := now.In(trafficCycleLocation)
-	boundary := cycleBoundary(local.Year(), local.Month(), *resetDay)
-	if local.Before(boundary) {
-		previous := local.AddDate(0, -1, 0)
-		boundary = cycleBoundary(previous.Year(), previous.Month(), *resetDay)
-	}
-	return boundary.Format(time.DateOnly)
+	return currentTrafficCycleAt(resetDay, "", "", now)
+}
+
+func currentTrafficCycleAt(resetDay *int, clock, timezone string, now time.Time) string {
+	return trafficreset.FromFields(resetDay, clock, timezone).CycleKey(now)
 }
 
 func applyClientDisplayFields(client *models.Client, now time.Time) bool {
 	changed := false
-	cycle := currentTrafficCycle(client.TrafficResetDay, now)
+	cycle := currentTrafficCycleAt(client.TrafficResetDay, client.TrafficResetTime, client.TrafficResetTimezone, now)
 	if client.TrafficResetAllowance < 0 || cycle == "" || client.TrafficResetCycle != cycle {
 		if client.TrafficResetAllowance != 0 || client.TrafficResetCycle != "" {
 			client.TrafficResetAllowance = 0

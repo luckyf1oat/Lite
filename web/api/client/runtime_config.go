@@ -17,11 +17,12 @@ func getClientRuntimeConfig(uuid string) (*v2.ConfigParams, error) {
 	if saved {
 		config := profile.RuntimeConfig()
 		config.Revision = deliveryState.Revision
+		clients.ApplyResetClock(&config, clientInfo)
 		return &config, nil
 	}
 	if clientInfo.TrafficResetDay == nil {
 		return nil, nil
 	}
-	monthRotate := *clientInfo.TrafficResetDay
-	return &v2.ConfigParams{MonthRotate: &monthRotate}, nil
+	config := clients.AgentMonthRotateConfig(clientInfo)
+	return &config, nil
 }

@@ -102,22 +102,28 @@ func PasskeyRegisterOptions(c *gin.Context) {
 		api.RespondError(c, http.StatusInternalServerError, "Failed to start passkey registration")
 		return
 	}
-	attachment := protocol.Platform
-	hints := []protocol.PublicKeyCredentialHints{protocol.PublicKeyCredentialHintClientDevice}
-	if strings.TrimSpace(req.Prefer) == "password-manager" {
-		attachment = protocol.CrossPlatform
-		hints = []protocol.PublicKeyCredentialHints{protocol.PublicKeyCredentialHintHybrid}
+	selection := protocol.AuthenticatorSelection{
+		ResidentKey:        protocol.ResidentKeyRequirementRequired,
+		RequireResidentKey: protocol.ResidentKeyRequired(),
+		UserVerification:   protocol.VerificationRequired,
 	}
 	opts := []webauthn.RegistrationOption{
-		webauthn.WithAuthenticatorSelection(protocol.AuthenticatorSelection{
-			AuthenticatorAttachment: attachment,
-			ResidentKey:             protocol.ResidentKeyRequirementRequired,
-			RequireResidentKey:      protocol.ResidentKeyRequired(),
-			UserVerification:        protocol.VerificationRequired,
-		}),
 		webauthn.WithConveyancePreference(protocol.PreferNoAttestation),
 		webauthn.WithExclusions(webauthn.Credentials(user.WebAuthnCredentials()).CredentialDescriptors()),
-		webauthn.WithPublicKeyCredentialHints(hints),
+	}
+	if strings.TrimSpace(req.Prefer) == "password-manager" {
+		// Leave attachment and hints unset. hybrid/client-device would make
+		// go-webauthn infer cross-platform or platform, which hides password
+		// managers on iOS or forces Windows Hello on desktop.
+		opts = append(opts, webauthn.WithAuthenticatorSelection(selection))
+	} else {
+		selection.AuthenticatorAttachment = protocol.Platform
+		opts = append(opts,
+			webauthn.WithAuthenticatorSelection(selection),
+			webauthn.WithPublicKeyCredentialHints([]protocol.PublicKeyCredentialHints{
+				protocol.PublicKeyCredentialHintClientDevice,
+			}),
+		)
 	}
 	creation, session, err := wa.BeginRegistration(user, opts...)
 	if err != nil {

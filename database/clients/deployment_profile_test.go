@@ -93,6 +93,26 @@ func TestNormalizeDeploymentProfileRejectsInvalidRuntimeValues(t *testing.T) {
 	if err := normalizeDeploymentProfile(&profile); err == nil {
 		t.Fatal("expected invalid month rotation day to be rejected")
 	}
+
+	profile = DeploymentProfile{
+		Platform:          "linux",
+		EnableMonthRotate: true,
+		MonthRotate:       1,
+		MonthRotateTime:   "25:00:00",
+	}
+	if err := normalizeDeploymentProfile(&profile); err == nil {
+		t.Fatal("expected invalid month rotation time to be rejected")
+	}
+
+	profile = DeploymentProfile{
+		Platform:            "linux",
+		EnableMonthRotate:   true,
+		MonthRotate:         1,
+		MonthRotateTimezone: "Not/AZone",
+	}
+	if err := normalizeDeploymentProfile(&profile); err == nil {
+		t.Fatal("expected invalid month rotation timezone to be rejected")
+	}
 }
 
 func TestDeploymentProfileAndBillingEditorShareTrafficResetDay(t *testing.T) {
@@ -119,16 +139,21 @@ func TestDeploymentProfileAndBillingEditorShareTrafficResetDay(t *testing.T) {
 		t.Fatalf("save deployment profile: %v", err)
 	}
 	var client models.Client
-	if err := db.Select("uuid", "traffic_reset_day").First(&client, "uuid = ?", "node-a").Error; err != nil {
+	if err := db.Select("uuid", "traffic_reset_day", "traffic_reset_time", "traffic_reset_timezone").First(&client, "uuid = ?", "node-a").Error; err != nil {
 		t.Fatalf("read client: %v", err)
 	}
 	if client.TrafficResetDay == nil || *client.TrafficResetDay != 17 {
 		t.Fatalf("billing reset day = %v, want 17", client.TrafficResetDay)
 	}
+	if client.TrafficResetTime != "00:00:00" || client.TrafficResetTimezone != "Asia/Shanghai" {
+		t.Fatalf("billing reset clock = %s %s, want 00:00:00 Asia/Shanghai", client.TrafficResetTime, client.TrafficResetTimezone)
+	}
 
 	if err := saveClient(db, map[string]interface{}{
-		"uuid":              "node-a",
-		"traffic_reset_day": float64(9),
+		"uuid":                     "node-a",
+		"traffic_reset_day":        float64(9),
+		"traffic_reset_time":       "12:38:12",
+		"traffic_reset_timezone":   "UTC",
 	}); err != nil {
 		t.Fatalf("save billing reset day: %v", err)
 	}
@@ -138,6 +163,9 @@ func TestDeploymentProfileAndBillingEditorShareTrafficResetDay(t *testing.T) {
 	}
 	if !saved || !loaded.EnableMonthRotate || loaded.MonthRotate != 9 {
 		t.Fatalf("deployment reset day = enabled:%v day:%d, want enabled:true day:9", loaded.EnableMonthRotate, loaded.MonthRotate)
+	}
+	if loaded.MonthRotateTime != "12:38:12" || loaded.MonthRotateTimezone != "UTC" {
+		t.Fatalf("deployment reset clock = %s %s, want 12:38:12 UTC", loaded.MonthRotateTime, loaded.MonthRotateTimezone)
 	}
 }
 

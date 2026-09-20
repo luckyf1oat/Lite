@@ -34,6 +34,11 @@ func TestCurrentTrafficCycleUsesMostRecentBeijingResetDay(t *testing.T) {
 	assert.Empty(t, currentTrafficCycle(trafficDay(0), time.Now()))
 }
 
+func TestCurrentTrafficCycleUsesConfiguredTimezoneAndClock(t *testing.T) {
+	assert.Equal(t, "2026-08-15", currentTrafficCycleAt(trafficDay(15), "12:38:12", "UTC", time.Date(2026, 9, 15, 12, 38, 11, 0, time.UTC)))
+	assert.Equal(t, "2026-09-15", currentTrafficCycleAt(trafficDay(15), "12:38:12", "UTC", time.Date(2026, 9, 15, 12, 38, 12, 0, time.UTC)))
+}
+
 func TestApplyClientDisplayFieldsAddsCurrentCycleResetTraffic(t *testing.T) {
 	client := models.Client{
 		Region: "🇺🇸", RegionOverride: "🇸🇬",

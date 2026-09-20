@@ -41,7 +41,9 @@ func init() {
 		Params: []rpc.ParamMeta{
 			{Name: "limit", Type: "string", Description: "Page size (default 100)"},
 			{Name: "page", Type: "string", Description: "One-based page number (default 1)"},
-			{Name: "msg_type", Type: "string", Description: "Optional exact message type filter"},
+			{Name: "msg_type", Type: "string", Description: "Optional comma-separated message type filter"},
+			{Name: "day", Type: "string", Description: "Optional comma-separated UTC date filter (YYYY-MM-DD)"},
+			{Name: "q", Type: "string", Description: "Optional fuzzy search against IP and message"},
 		},
 		Returns: "{ logs: Log[], total: number }",
 	})
@@ -73,6 +75,8 @@ func adminGetLogs(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpc
 		Limit   string `json:"limit"`
 		Page    string `json:"page"`
 		MsgType string `json:"msg_type"`
+		Day     string `json:"day"`
+		Q       string `json:"q"`
 	}
 	req.BindParams(&params)
 	if params.Limit == "" {
@@ -90,33 +94,136 @@ func adminGetLogs(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpc
 		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid page: "+params.Page, nil)
 	}
 	db := dbcore.GetDBInstance()
-	logs, total, err := queryAdminLogs(db, limitInt, pageInt, params.MsgType)
+	logs, total, facets, err := queryAdminLogs(db, adminLogQuery{
+		Limit:  limitInt,
+		Page:   pageInt,
+		Types:  parseAdminLogCSV(params.MsgType),
+		Days:   parseAdminLogCSV(params.Day),
+		Search: params.Q,
+	})
 	if err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to retrieve logs: "+err.Error(), nil)
 	}
-	return map[string]any{"logs": logs, "total": total}, nil
+	return map[string]any{
+		"logs":  logs,
+		"total": total,
+		"types": facets.Types,
+		"days":  facets.Days,
+	}, nil
 }
 
-func queryAdminLogs(db *gorm.DB, limit, page int, msgType string) ([]models.Log, int64, error) {
+type adminLogQuery struct {
+	Limit  int
+	Page   int
+	Types  []string
+	Days   []string
+	Search string
+}
+
+type adminLogFilterOption struct {
+	Value string `json:"value"`
+	Count int64  `json:"count"`
+}
+
+type adminLogFacets struct {
+	Types []adminLogFilterOption `json:"types"`
+	Days  []adminLogFilterOption `json:"days"`
+}
+
+func queryAdminLogs(db *gorm.DB, q adminLogQuery) ([]models.Log, int64, adminLogFacets, error) {
 	var logs []models.Log
 	var total int64
-	offset := (page - 1) * limit
-	countQuery := filterAdminLogsByMessageType(db.Model(&models.Log{}), msgType)
-	logsQuery := filterAdminLogsByMessageType(db.Model(&models.Log{}), msgType)
+	offset := (q.Page - 1) * q.Limit
+	countQuery := filterAdminLogs(db.Model(&models.Log{}), q)
+	logsQuery := filterAdminLogs(db.Model(&models.Log{}), q)
 	if err := countQuery.Count(&total).Error; err != nil {
-		return nil, 0, err
+		return nil, 0, adminLogFacets{}, err
 	}
-	if err := logsQuery.Order("time desc").Limit(limit).Offset(offset).Find(&logs).Error; err != nil {
-		return nil, 0, err
+	if err := logsQuery.Order("time desc").Limit(q.Limit).Offset(offset).Find(&logs).Error; err != nil {
+		return nil, 0, adminLogFacets{}, err
 	}
-	return logs, total, nil
+	facets, err := listAdminLogFacets(db)
+	if err != nil {
+		return nil, 0, adminLogFacets{}, err
+	}
+	return logs, total, facets, nil
+}
+
+func listAdminLogFacets(db *gorm.DB) (adminLogFacets, error) {
+	var facets adminLogFacets
+	if err := db.Model(&models.Log{}).
+		Select("msg_type AS value, COUNT(*) AS count").
+		Where("msg_type <> ''").
+		Group("msg_type").
+		Order("count DESC, msg_type").
+		Scan(&facets.Types).Error; err != nil {
+		return facets, err
+	}
+	if err := db.Model(&models.Log{}).
+		Select("date(time) AS value, COUNT(*) AS count").
+		Group("date(time)").
+		Order("value DESC").
+		Scan(&facets.Days).Error; err != nil {
+		return facets, err
+	}
+	return facets, nil
+}
+
+func filterAdminLogs(query *gorm.DB, q adminLogQuery) *gorm.DB {
+	query = filterAdminLogsByValues(query, "msg_type", q.Types)
+	query = filterAdminLogsByDays(query, q.Days)
+	return filterAdminLogsBySearch(query, q.Search)
 }
 
 func filterAdminLogsByMessageType(query *gorm.DB, msgType string) *gorm.DB {
-	if msgType = strings.TrimSpace(msgType); msgType != "" {
-		return query.Where("msg_type = ?", msgType)
+	return filterAdminLogsByValues(query, "msg_type", parseAdminLogCSV(msgType))
+}
+
+func filterAdminLogsByValues(query *gorm.DB, column string, values []string) *gorm.DB {
+	if len(values) == 0 {
+		return query
 	}
-	return query
+	return query.Where(column+" IN ?", values)
+}
+
+func filterAdminLogsByDays(query *gorm.DB, days []string) *gorm.DB {
+	if len(days) == 0 {
+		return query
+	}
+	return query.Where("date(time) IN ?", days)
+}
+
+func filterAdminLogsBySearch(query *gorm.DB, search string) *gorm.DB {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return query
+	}
+	like := "%" + escapeAdminLogLike(search) + "%"
+	return query.Where(`ip LIKE ? ESCAPE '\' OR message LIKE ? ESCAPE '\'`, like, like)
+}
+
+func parseAdminLogCSV(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var out []string
+	for _, part := range strings.Split(value, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if _, exists := seen[part]; exists {
+			continue
+		}
+		seen[part] = struct{}{}
+		out = append(out, part)
+	}
+	return out
+}
+
+func escapeAdminLogLike(value string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
 }
 
 func adminCloudflaredStatus(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {

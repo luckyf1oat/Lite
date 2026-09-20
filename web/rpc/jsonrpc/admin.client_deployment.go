@@ -68,6 +68,9 @@ func adminSaveClientDeploymentProfile(ctx context.Context, req *rpc.JsonRpcReque
 	if runtimeChanged {
 		runtimeConfig := profile.RuntimeConfig()
 		runtimeConfig.Revision = deliveryState.Revision
+		if clientInfo, err := clients.GetClientByUUID(params.UUID); err == nil {
+			clients.ApplyResetClock(&runtimeConfig, clientInfo)
+		}
 		_, sent, supported := agent_runtime.DispatchV2Config(params.UUID, runtimeConfig)
 		if sent {
 			delivery = "sent"

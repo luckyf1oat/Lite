@@ -6,11 +6,12 @@ import (
 
 	"github.com/nuomiiiii/lite/database/models"
 	"github.com/nuomiiiii/lite/database/trafficledger"
+	"github.com/nuomiiiii/lite/pkg/trafficreset"
 	"gorm.io/gorm"
 )
 
 type clientBillingMeta struct {
-	ResetDay int
+	Schedule trafficreset.Schedule
 }
 
 type committedCycle struct {
@@ -49,7 +50,7 @@ func listBillableVersions(ctx context.Context, db *gorm.DB, clients, nativeCurre
 }
 
 func loadClientBillingMeta(ctx context.Context, db *gorm.DB, clients []string) (map[string]clientBillingMeta, error) {
-	query := db.WithContext(ctx).Model(&models.Client{}).Select("uuid", "traffic_reset_day")
+	query := db.WithContext(ctx).Model(&models.Client{}).Select("uuid", "traffic_reset_day", "traffic_reset_time", "traffic_reset_timezone")
 	if len(clients) > 0 {
 		query = query.Where("uuid IN ?", clients)
 	}
@@ -59,7 +60,10 @@ func loadClientBillingMeta(ctx context.Context, db *gorm.DB, clients []string) (
 	}
 	result := make(map[string]clientBillingMeta, len(rows))
 	for _, row := range rows {
-		result[row.UUID] = clientBillingMeta{ResetDay: trafficledger.NormalizedResetDay(row.TrafficResetDay)}
+		day := trafficledger.NormalizedResetDay(row.TrafficResetDay)
+		result[row.UUID] = clientBillingMeta{
+			Schedule: trafficreset.FromFields(&day, row.TrafficResetTime, row.TrafficResetTimezone),
+		}
 	}
 	return result, nil
 }
@@ -192,15 +196,15 @@ func latestVersionForCycle(versions []models.BillingPriceVersion, client string,
 	return best
 }
 
-func iterCycleStarts(resetDay int, from, until time.Time) []time.Time {
+func iterCycleStarts(schedule trafficreset.Schedule, from, until time.Time) []time.Time {
 	if until.IsZero() || !from.Before(until) {
 		return nil
 	}
-	start := trafficledger.CycleContaining(resetDay, from)
+	start := schedule.Last(from)
 	starts := make([]time.Time, 0, 24)
 	for i := 0; i < 240 && start.Before(until); i++ {
 		starts = append(starts, start)
-		start = trafficledger.NextCycleStart(start, resetDay)
+		start = schedule.Next(start)
 	}
 	return starts
 }
@@ -249,12 +253,13 @@ func walkCommittedCycles(
 	}
 	result := make([]committedCycle, 0, len(clients)*12)
 	for client := range clients {
-		resetDay := 1
+		defaultDay := 1
+		reset := trafficreset.FromFields(&defaultDay, "", "")
 		if item, ok := meta[client]; ok {
-			resetDay = item.ResetDay
+			reset = item.Schedule
 		}
-		for _, start := range iterCycleStarts(resetDay, from, until) {
-			end := trafficledger.NextCycleStart(start, resetDay)
+		for _, start := range iterCycleStarts(reset, from, until) {
+			end := reset.Next(start)
 			version := latestVersionForCycle(versions, client, start, end)
 			if version == nil {
 				continue

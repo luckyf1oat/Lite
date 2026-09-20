@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nuomiiiii/lite/database/models"
+	"github.com/nuomiiiii/lite/pkg/trafficreset"
 )
 
 // themeNodeForbiddenJSONKeys are never serialized on common:getNodes,
@@ -60,11 +61,36 @@ type ThemeNode struct {
 	TrafficLimit          int64      `json:"traffic_limit"`
 	TrafficLimitType      string     `json:"traffic_limit_type"`
 	TrafficResetDay       *int       `json:"traffic_reset_day,omitempty"`
+	TrafficResetTime      string     `json:"traffic_reset_time,omitempty"`
+	TrafficResetTimezone  string     `json:"traffic_reset_timezone,omitempty"`
+	TrafficResetAt        string     `json:"traffic_reset_at,omitempty"`
 	EffectiveTrafficLimit int64      `json:"effective_traffic_limit"`
 	EffectiveTrafficType  string     `json:"effective_traffic_type"`
 }
 
+func themeTrafficResetDay(node models.Client, now time.Time) *int {
+	if !trafficreset.Enabled(node.TrafficResetDay) {
+		return node.TrafficResetDay
+	}
+	next := trafficreset.FromFields(node.TrafficResetDay, node.TrafficResetTime, node.TrafficResetTimezone).Next(now)
+	if next.IsZero() {
+		return node.TrafficResetDay
+	}
+	day := next.In(trafficreset.Location(trafficreset.DefaultTimezone)).Day()
+	return &day
+}
+
 func toThemeNode(node models.Client) ThemeNode {
+	now := time.Now()
+	schedule := trafficreset.FromFields(node.TrafficResetDay, node.TrafficResetTime, node.TrafficResetTimezone)
+	resetTime := ""
+	resetTimezone := ""
+	resetAt := ""
+	if schedule.Active() {
+		resetTime = trafficreset.FormatClock(schedule.Hour, schedule.Minute, schedule.Second)
+		resetTimezone = schedule.Timezone
+		resetAt = schedule.FormatNext(now)
+	}
 	return ThemeNode{
 		UUID:                  node.UUID,
 		Name:                  node.Name,
@@ -96,7 +122,10 @@ func toThemeNode(node models.Client) ThemeNode {
 		Hidden:                node.Hidden,
 		TrafficLimit:          node.TrafficLimit,
 		TrafficLimitType:      node.TrafficLimitType,
-		TrafficResetDay:       node.TrafficResetDay,
+		TrafficResetDay:       themeTrafficResetDay(node, now),
+		TrafficResetTime:      resetTime,
+		TrafficResetTimezone:  resetTimezone,
+		TrafficResetAt:        resetAt,
 		EffectiveTrafficLimit: node.EffectiveTrafficLimit,
 		EffectiveTrafficType:  node.EffectiveTrafficType,
 	}

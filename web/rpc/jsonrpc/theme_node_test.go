@@ -2,6 +2,7 @@ package jsonrpc
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,8 +91,11 @@ func TestThemeNodeOmitsForbiddenFieldsForGuestAndAdmin(t *testing.T) {
 		if !keys["kernel_version"] {
 			t.Fatalf("admin=%v: kernel_version should remain", isAdmin)
 		}
-		if !keys["uuid"] || !keys["effective_traffic_limit"] || !keys["traffic_reset_day"] {
+		if !keys["uuid"] || !keys["effective_traffic_limit"] || !keys["traffic_reset_day"] || !keys["traffic_reset_at"] {
 			t.Fatalf("admin=%v: required theme fields missing: %v", isAdmin, keys)
+		}
+		if presented[0].TrafficResetAt == "" || presented[0].TrafficResetTimezone != "Asia/Shanghai" {
+			t.Fatalf("admin=%v: traffic reset datetime missing: %+v", isAdmin, presented[0])
 		}
 	}
 }
@@ -152,6 +156,57 @@ func TestPresentThemeNodesAppliesTrafficCompatibility(t *testing.T) {
 	}
 	if presented[0].EffectiveTrafficLimit != 80 || presented[0].EffectiveTrafficType != "max" {
 		t.Fatalf("effective quota missing: %+v", presented[0])
+	}
+}
+
+func TestThemeNodeTrafficResetAtUsesConfiguredClockAndTimezone(t *testing.T) {
+	node := sampleThemeClient(false, "secret")
+	day := 15
+	node.TrafficResetDay = &day
+	node.TrafficResetTime = "12:38:12"
+	node.TrafficResetTimezone = "UTC"
+	presented := presentThemeNodes([]models.Client{node}, false, true)
+	if presented[0].TrafficResetTime != "12:38:12" || presented[0].TrafficResetTimezone != "UTC" {
+		t.Fatalf("theme reset clock = %s %s", presented[0].TrafficResetTime, presented[0].TrafficResetTimezone)
+	}
+	if !strings.Contains(presented[0].TrafficResetAt, "T12:38:12Z") {
+		t.Fatalf("traffic_reset_at = %q, want the UTC instant 12:38:12", presented[0].TrafficResetAt)
+	}
+
+	node.TrafficResetTime = "00:00:00"
+	node.TrafficResetTimezone = "Asia/Shanghai"
+	presented = presentThemeNodes([]models.Client{node}, false, true)
+	if presented[0].TrafficResetTimezone != "Asia/Shanghai" {
+		t.Fatalf("shanghai timezone = %q", presented[0].TrafficResetTimezone)
+	}
+	if !strings.Contains(presented[0].TrafficResetAt, "T00:00:00+08:00") {
+		t.Fatalf("shanghai traffic_reset_at = %q, want 00:00:00+08:00", presented[0].TrafficResetAt)
+	}
+}
+
+func TestThemeNodeTrafficResetDayIsBeijingDayOfNextReset(t *testing.T) {
+	now := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	day := 15
+	node := sampleThemeClient(false, "secret")
+	node.TrafficResetDay = &day
+	node.TrafficResetTime = "12:38:12"
+	node.TrafficResetTimezone = "UTC"
+	sameDay := themeTrafficResetDay(node, now)
+	if sameDay == nil || *sameDay != 15 {
+		t.Fatalf("UTC 15 12:38:12 should stay Beijing day 15, got %v", sameDay)
+	}
+
+	node.TrafficResetTime = "20:00:00"
+	crossed := themeTrafficResetDay(node, now)
+	if crossed == nil || *crossed != 16 {
+		t.Fatalf("UTC 15 20:00:00 should become Beijing day 16, got %v", crossed)
+	}
+
+	node.TrafficResetTime = "00:00:00"
+	node.TrafficResetTimezone = "Asia/Shanghai"
+	local := themeTrafficResetDay(node, now)
+	if local == nil || *local != 15 {
+		t.Fatalf("Beijing 15 00:00 should stay day 15, got %v", local)
 	}
 }
 

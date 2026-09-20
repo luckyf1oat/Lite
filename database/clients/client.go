@@ -18,7 +18,9 @@ import (
 	"github.com/nuomiiiii/lite/database/tasks"
 	"github.com/nuomiiiii/lite/database/trafficledger"
 	"github.com/nuomiiiii/lite/pkg/config"
+	"github.com/nuomiiiii/lite/pkg/trafficreset"
 	"github.com/nuomiiiii/lite/utils"
+	v2 "github.com/nuomiiiii/lite/protocol/v2"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -713,7 +715,7 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 	}
 
 	var existing models.Client
-	if err := db.Select("uuid", "name", "region", "group", "price", "billing_cycle", "currency", "expired_at", "region_override", "traffic_limit", "traffic_limit_type", "traffic_reset_day", "traffic_reset_allowance", "traffic_reset_cycle").
+	if err := db.Select("uuid", "name", "region", "group", "price", "billing_cycle", "currency", "expired_at", "region_override", "traffic_limit", "traffic_limit_type", "traffic_reset_day", "traffic_reset_time", "traffic_reset_timezone", "traffic_reset_allowance", "traffic_reset_cycle").
 		Where("uuid = ?", clientUUID).First(&existing).Error; err != nil {
 		return err
 	}
@@ -770,6 +772,32 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 			resetDay = normalized
 		}
 	}
+	resetTime := existing.TrafficResetTime
+	if value, exists := updates["traffic_reset_time"]; exists {
+		raw, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("traffic_reset_time must be a string")
+		}
+		normalized, err := trafficreset.NormalizeClock(raw)
+		if err != nil {
+			return err
+		}
+		resetTime = normalized
+		updates["traffic_reset_time"] = normalized
+	}
+	resetTimezone := existing.TrafficResetTimezone
+	if value, exists := updates["traffic_reset_timezone"]; exists {
+		raw, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("traffic_reset_timezone must be a string")
+		}
+		normalized, err := trafficreset.NormalizeTimezone(raw)
+		if err != nil {
+			return err
+		}
+		resetTimezone = normalized
+		updates["traffic_reset_timezone"] = normalized
+	}
 	resetAllowance := existing.TrafficResetAllowance
 	if value, exists := updates["traffic_reset_allowance"]; exists {
 		numeric, ok := toInt64(value)
@@ -781,7 +809,7 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 	}
 	if _, allowanceChanged := updates["traffic_reset_allowance"]; allowanceChanged {
 		if resetAllowance > 0 {
-			cycle := currentTrafficCycle(resetDay, time.Now().UTC())
+			cycle := currentTrafficCycleAt(resetDay, resetTime, resetTimezone, time.Now().UTC())
 			if cycle == "" {
 				return fmt.Errorf("set a traffic reset day from 1 to 31 before adding reset traffic")
 			}
@@ -797,7 +825,23 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 			updates["traffic_reset_cycle"] = ""
 		}
 	} else if _, resetDayChanged := updates["traffic_reset_day"]; resetDayChanged {
-		cycle := currentTrafficCycle(resetDay, time.Now().UTC())
+		cycle := currentTrafficCycleAt(resetDay, resetTime, resetTimezone, time.Now().UTC())
+		if resetAllowance <= 0 || cycle == "" {
+			updates["traffic_reset_allowance"] = 0
+			updates["traffic_reset_cycle"] = ""
+		} else {
+			updates["traffic_reset_cycle"] = cycle
+		}
+	} else if _, timeChanged := updates["traffic_reset_time"]; timeChanged {
+		cycle := currentTrafficCycleAt(resetDay, resetTime, resetTimezone, time.Now().UTC())
+		if resetAllowance <= 0 || cycle == "" {
+			updates["traffic_reset_allowance"] = 0
+			updates["traffic_reset_cycle"] = ""
+		} else {
+			updates["traffic_reset_cycle"] = cycle
+		}
+	} else if _, tzChanged := updates["traffic_reset_timezone"]; tzChanged {
+		cycle := currentTrafficCycleAt(resetDay, resetTime, resetTimezone, time.Now().UTC())
 		if resetAllowance <= 0 || cycle == "" {
 			updates["traffic_reset_allowance"] = 0
 			updates["traffic_reset_cycle"] = ""
@@ -967,6 +1011,35 @@ func normalizeTrafficResetDay(value interface{}) (*int, error) {
 	}
 	day := int(numericValue)
 	return &day, nil
+}
+
+func AgentMonthRotateConfig(client models.Client) v2.ConfigParams {
+	day := 0
+	if client.TrafficResetDay != nil {
+		day = *client.TrafficResetDay
+	}
+	clock, err := trafficreset.NormalizeClock(client.TrafficResetTime)
+	if err != nil {
+		clock = trafficreset.DefaultTime
+	}
+	timezone, err := trafficreset.NormalizeTimezone(client.TrafficResetTimezone)
+	if err != nil {
+		timezone = trafficreset.DefaultTimezone
+	}
+	return v2.ConfigParams{
+		MonthRotate:         &day,
+		MonthRotateTime:     &clock,
+		MonthRotateTimezone: &timezone,
+	}
+}
+
+func ApplyResetClock(config *v2.ConfigParams, client models.Client) {
+	if config == nil {
+		return
+	}
+	reset := AgentMonthRotateConfig(client)
+	config.MonthRotateTime = reset.MonthRotateTime
+	config.MonthRotateTimezone = reset.MonthRotateTimezone
 }
 
 // AdoptTrafficResetDay records an Agent's existing setting only while the node

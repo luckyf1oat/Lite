@@ -23,7 +23,7 @@ type trafficCalibrationRequest struct {
 func findTrafficCalibrationClient(uuid string) (models.Client, error) {
 	var client models.Client
 	err := dbcore.GetDBInstance().
-		Select("uuid", "name", "traffic_reset_day").
+		Select("uuid", "name", "traffic_reset_day", "traffic_reset_time", "traffic_reset_timezone").
 		Where("uuid = ?", uuid).
 		First(&client).Error
 	return client, err
@@ -39,7 +39,7 @@ func GetTrafficCalibration(c *gin.Context) {
 		api.RespondError(c, http.StatusInternalServerError, "读取服务器失败："+err.Error())
 		return
 	}
-	if _, _, err := trafficledger.CurrentTrafficCycle(client.TrafficResetDay, time.Now().UTC()); err != nil {
+	if _, _, err := trafficledger.CurrentTrafficCycleFor(client, time.Now().UTC()); err != nil {
 		api.RespondSuccess(c, gin.H{
 			"available": false,
 			"client":    client.UUID,
