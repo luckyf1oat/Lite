@@ -41,13 +41,13 @@ type ContextMeta struct {
 // 私有类型做 key，避免外部冲突
 type ctxMetaKey struct{}
 
-// NewContextWithMeta 将 meta 写入 context
+// NewContextWithMeta 将 meta 写入 context。nil meta 会落成匿名访客，避免 handler 解引用空指针。
 func NewContextWithMeta(parent context.Context, meta *ContextMeta) context.Context {
 	if parent == nil {
 		parent = context.Background()
 	}
 	if meta == nil {
-		return parent
+		meta = &ContextMeta{Principal: NewAnonymousPrincipal()}
 	}
 	return context.WithValue(parent, ctxMetaKey{}, meta)
 }

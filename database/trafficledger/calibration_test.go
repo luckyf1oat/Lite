@@ -125,3 +125,92 @@ func TestShiftCumulativeCounterMakesNewestPointExact(t *testing.T) {
 	assert.Equal(t, int64(0), ShiftCumulativeCounter(20, 100, 50))
 	assert.Equal(t, int64(50), ShiftCumulativeCounter(100, 100, 50))
 }
+
+func TestCalibrationDaysIncludeBeijingTodayWhenVendorResetIsLaterTheSameDay(t *testing.T) {
+	now := time.Date(2026, 9, 21, 14, 0, 0, 0, time.UTC)
+	today := BeijingDay(now)
+	cycleStart := time.Date(2026, 9, 21, 12, 38, 12, 0, time.UTC)
+	require.True(t, cycleStart.After(today), "vendor reset after Beijing midnight is the production panic condition")
+
+	old := map[string]*calibrationDay{}
+	for day := cycleStart; !day.After(today); day = day.AddDate(0, 0, 1) {
+		old[dayKey(day)] = &calibrationDay{Day: dayKey(day)}
+	}
+	require.Nil(t, old[dayKey(today)], "the previous AddDate loop skipped Beijing today")
+
+	daysByKey, dayKeys := calibrationDaysByKey(cycleStart, today)
+	require.NotNil(t, daysByKey[dayKey(today)])
+	require.NotPanics(t, func() {
+		applyCurrentDayUsage(daysByKey, dayKeys, today, Usage{Up: 7, Down: 9})
+	})
+	assert.Equal(t, int64(7), daysByKey[dayKey(today)].Raw.Up)
+}
+
+func TestApplyCurrentDayUsageCreatesMissingBeijingTodaySlot(t *testing.T) {
+	today := BeijingDay(time.Date(2026, 9, 21, 2, 52, 0, 0, BeijingLocation))
+	daysByKey := map[string]*calibrationDay{}
+	require.NotPanics(t, func() {
+		applyCurrentDayUsage(daysByKey, nil, today, Usage{Up: 3})
+	})
+	require.NotNil(t, daysByKey[dayKey(today)])
+	assert.Equal(t, int64(3), daysByKey[dayKey(today)].Raw.Up)
+}
+
+func TestCurrentTrafficCycleForEmptyResetClockAndTimezone(t *testing.T) {
+	day := 15
+	now := time.Date(2026, 9, 21, 2, 52, 0, 0, BeijingLocation)
+	start, cycle, err := CurrentTrafficCycleFor(models.Client{
+		UUID:                 "node",
+		TrafficResetDay:      &day,
+		TrafficResetTime:     "",
+		TrafficResetTimezone: "",
+	}, now)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-09-15", cycle)
+	assert.True(t, start.Equal(time.Date(2026, 9, 15, 0, 0, 0, 0, BeijingLocation)))
+}
+
+func TestCurrentCalibratedCycleUsagesEmptyResetClockDoesNotPanic(t *testing.T) {
+	db := openLedgerTestDB(t, "calibration-empty-reset-clock")
+	InvalidateCalibratedCycleCache()
+	t.Cleanup(InvalidateCalibratedCycleCache)
+
+	day := 21
+	require.NoError(t, db.Model(&models.Client{}).Where("uuid = ?", "client-a").Updates(map[string]any{
+		"traffic_reset_day":      day,
+		"traffic_reset_time":     "",
+		"traffic_reset_timezone": "",
+	}).Error)
+
+	now := time.Date(2026, 9, 21, 14, 0, 0, 0, time.UTC)
+	_, cycle, err := CurrentTrafficCycleFor(models.Client{
+		UUID:                 "client-a",
+		TrafficResetDay:      &day,
+		TrafficResetTime:     "",
+		TrafficResetTimezone: "",
+	}, now)
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&models.TrafficCalibrationAdjustment{
+		CalibrationID: "cal-empty",
+		Client:        "client-a",
+		Cycle:         cycle,
+		Day:           "2026-09-21",
+		UpDelta:       1,
+	}).Error)
+
+	var usages map[string]Usage
+	require.NotPanics(t, func() {
+		var loadErr error
+		usages, loadErr = CurrentCalibratedCycleUsages(context.Background(), db, now)
+		require.NoError(t, loadErr)
+	})
+	assert.NotNil(t, usages)
+}
+
+func TestCycleEndDayDoesNotDereferenceNilResetDay(t *testing.T) {
+	start := time.Date(2026, 9, 15, 0, 0, 0, 0, BeijingLocation)
+	require.NotPanics(t, func() {
+		end := cycleEndDay(models.Client{}, start)
+		assert.False(t, end.IsZero())
+	})
+}

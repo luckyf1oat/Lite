@@ -100,6 +100,18 @@ func TestDashboardModuleCacheHonorsFifteenSecondRefresh(t *testing.T) {
 	assert.Equal(t, int32(2), calls.Load())
 }
 
+func TestDashboardModuleCacheRecoversLoadPanic(t *testing.T) {
+	var cache dashboardModuleCache[int]
+	now := time.Now().UTC()
+	require.NotPanics(t, func() {
+		_, err := cache.get(context.Background(), now, "alerts", time.Minute, func() (int, error) {
+			panic("runtime error: invalid memory address or nil pointer dereference")
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "dashboard module panic")
+	})
+}
+
 func TestDashboardNavigationFollowsThirdPartyThemeManifest(t *testing.T) {
 	t.Chdir(t.TempDir())
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})

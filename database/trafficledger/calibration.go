@@ -119,31 +119,73 @@ func LoadCalibrationSnapshot(ctx context.Context, db *gorm.DB, client models.Cli
 	return snapshot, nil
 }
 
+// calibrationDaysByKey walks Beijing calendar days from the cycle start through
+// today. Walking the vendor reset instant with AddDate skips today when that
+// instant is later the same Beijing day (for example UTC 12:38 after 00:00 CST).
+func calibrationDaysByKey(cycleStart, today time.Time) (map[string]*calibrationDay, []string) {
+	today = BeijingDay(today)
+	startDay := BeijingDay(cycleStart)
+	if startDay.IsZero() || startDay.After(today) {
+		startDay = today
+	}
+	n := dayCount(startDay, today.AddDate(0, 0, 1))
+	if n < 1 {
+		n = 1
+	}
+	daysByKey := make(map[string]*calibrationDay, n)
+	dayKeys := make([]string, 0, n)
+	for day := startDay; !day.After(today); day = day.AddDate(0, 0, 1) {
+		key := dayKey(day)
+		daysByKey[key] = &calibrationDay{Day: key}
+		dayKeys = append(dayKeys, key)
+	}
+	return daysByKey, dayKeys
+}
+
+func applyCurrentDayUsage(daysByKey map[string]*calibrationDay, dayKeys []string, today time.Time, current Usage) []string {
+	key := dayKey(today)
+	day := daysByKey[key]
+	if day == nil {
+		day = &calibrationDay{Day: key}
+		daysByKey[key] = day
+		dayKeys = append(dayKeys, key)
+	}
+	day.Raw = current
+	return dayKeys
+}
+
+func cycleEndDay(client models.Client, cycleStart time.Time) time.Time {
+	schedule := clientSchedule(client)
+	resetDay := schedule.Day
+	if resetDay < 1 || resetDay > 31 {
+		resetDay = NormalizedResetDay(client.TrafficResetDay)
+	}
+	return trafficCycleInclusiveEnd(cycleStart, resetDay)
+}
+
 func loadCalibrationDays(ctx context.Context, db *gorm.DB, client models.Client, now time.Time) ([]calibrationDay, CalibrationSnapshot, error) {
 	cycleStart, cycle, err := CurrentTrafficCycleFor(client, now)
 	if err != nil {
 		return nil, CalibrationSnapshot{}, err
 	}
 	today := BeijingDay(now)
-	if cycleStart.Before(today) {
-		if err := EnsureRange(ctx, db, []string{client.UUID}, cycleStart, today); err != nil {
+	startDay := BeijingDay(cycleStart)
+	if startDay.IsZero() || startDay.After(today) {
+		startDay = today
+	}
+	if startDay.Before(today) {
+		if err := EnsureRange(ctx, db, []string{client.UUID}, startDay, today); err != nil {
 			return nil, CalibrationSnapshot{}, fmt.Errorf("settle traffic before calibration: %w", err)
 		}
 	}
 
-	daysByKey := make(map[string]*calibrationDay)
-	dayKeys := make([]string, 0, dayCount(cycleStart, today.AddDate(0, 0, 1)))
-	for day := cycleStart; !day.After(today); day = day.AddDate(0, 0, 1) {
-		key := dayKey(day)
-		daysByKey[key] = &calibrationDay{Day: key}
-		dayKeys = append(dayKeys, key)
-	}
+	daysByKey, dayKeys := calibrationDaysByKey(cycleStart, today)
 
-	if cycleStart.Before(today) {
+	if startDay.Before(today) {
 		var rows []models.TrafficDailyLedger
 		if err := db.WithContext(ctx).
 			Select("day", "up_bytes", "down_bytes").
-			Where("client = ? AND day >= ? AND day < ?", client.UUID, dayKey(cycleStart), dayKey(today)).
+			Where("client = ? AND day >= ? AND day < ?", client.UUID, dayKey(startDay), dayKey(today)).
 			Find(&rows).Error; err != nil {
 			return nil, CalibrationSnapshot{}, fmt.Errorf("read settled traffic before calibration: %w", err)
 		}
@@ -158,7 +200,7 @@ func loadCalibrationDays(ctx context.Context, db *gorm.DB, client models.Client,
 	if err != nil {
 		return nil, CalibrationSnapshot{}, fmt.Errorf("read current traffic before calibration: %w", err)
 	}
-	daysByKey[dayKey(today)].Raw = current
+	dayKeys = applyCurrentDayUsage(daysByKey, dayKeys, today, current)
 
 	var adjustments []struct {
 		Day       string
@@ -181,6 +223,9 @@ func loadCalibrationDays(ctx context.Context, db *gorm.DB, client models.Client,
 	days := make([]calibrationDay, 0, len(dayKeys))
 	for _, key := range dayKeys {
 		day := daysByKey[key]
+		if day == nil {
+			continue
+		}
 		day.Effective = Usage{
 			Up:   addSignedNonNegative(day.Raw.Up, day.Adjustment.Up),
 			Down: addSignedNonNegative(day.Raw.Down, day.Adjustment.Down),
@@ -191,7 +236,7 @@ func loadCalibrationDays(ctx context.Context, db *gorm.DB, client models.Client,
 		Client:     client.UUID,
 		Cycle:      cycle,
 		CycleStart: cycleStart.UTC(),
-		CycleEnd:   trafficCycleInclusiveEnd(cycleStart, *client.TrafficResetDay).UTC(),
+		CycleEnd:   cycleEndDay(client, cycleStart).UTC(),
 	}, nil
 }
 
@@ -360,6 +405,9 @@ func ShiftCumulativeCounter(value, newestRaw, newestEffective int64) int64 {
 }
 
 func applyHourlyDirection(hours []HourlyUsage, delta int64, field func(*HourlyUsage) *int64) {
+	if len(hours) == 0 {
+		return
+	}
 	if delta >= 0 {
 		*field(&hours[len(hours)-1]) += delta
 		return
@@ -430,7 +478,7 @@ func CurrentCalibratedCycleUsages(ctx context.Context, db *gorm.DB, now time.Tim
 		}
 		snapshot, err := LoadCalibrationSnapshot(ctx, db, client, now)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		values[client.UUID] = snapshot.Effective
 	}

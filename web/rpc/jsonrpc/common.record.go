@@ -18,7 +18,6 @@ func init() {
 }
 
 func getRecords(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
-	meta := rpc.MetaFromContext(ctx)
 	var params struct {
 		Type     string     `json:"type"`      // "load" | "ping"; default "load"
 		UUID     string     `json:"uuid"`      // client uuid; empty = all clients
@@ -62,7 +61,7 @@ func getRecords(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpc
 	}
 
 	// Hidden filtering for non-admin
-	isAdmin := meta.Principal != nil && meta.Principal.HasRole(rpc.RoleAdmin)
+	isAdmin := isLoginFromCtx(ctx)
 	hidden := map[string]bool{}
 	if !isAdmin {
 		cinfo, err := clients.GetAllClientBasicInfo()

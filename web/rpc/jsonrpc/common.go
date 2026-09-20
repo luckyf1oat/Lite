@@ -229,8 +229,7 @@ func getNodes(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcEr
 	if err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to get client info", err.Error())
 	}
-	meta := rpc.MetaFromContext(ctx)
-	isAdmin := meta != nil && meta.Principal != nil && meta.Principal.HasRole(rpc.RoleAdmin)
+	isAdmin := isLoginFromCtx(ctx)
 	sendIPAddrToGuest, _ := config.GetAs[bool](config.SendIpAddrToGuestKey)
 	nodes := presentThemeNodes(cinfo, isAdmin, sendIPAddrToGuest)
 	if params.UUID != "" {
@@ -266,7 +265,6 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	}
 	req.BindParams(&params)
 
-	meta := rpc.MetaFromContext(ctx)
 	latest := agent_runtime.GetLatestReport() // map[string]*v2.Report (copy)
 	// The compact admin view also shows billing-cycle usage. This helper is
 	// cached for 15 seconds, so the 5-second status poll does not rescan SQLite.
@@ -278,7 +276,7 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 	}
 
 	// Hidden 过滤
-	if meta.Principal == nil || !meta.Principal.HasRole(rpc.RoleAdmin) {
+	if !isLoginFromCtx(ctx) {
 		cinfo, err := clients.GetAllClientBasicInfo()
 		if err != nil {
 			return nil, rpc.MakeError(rpc.InternalError, "Failed to get client info", err.Error())
@@ -424,6 +422,10 @@ func getMe(ctx context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) 
 	}
 
 	meta := rpc.MetaFromContext(ctx)
+	if meta == nil || meta.Principal == nil {
+		resp.LoggedIn = false
+		return resp, nil
+	}
 
 	switch meta.Principal.Type {
 	case rpc.PrincipalUser, rpc.PrincipalAPIKey:
@@ -482,12 +484,7 @@ func getNodeRecentStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rp
 	if params.UUID == "" {
 		return nil, rpc.MakeError(rpc.InvalidParams, "UUID is required", params)
 	}
-	meta := rpc.MetaFromContext(ctx)
-	// 登录状态检查
-	isLogin := false
-	if meta.Principal != nil && meta.Principal.HasRole(rpc.RoleAdmin) {
-		isLogin = true
-	}
+	isLogin := isLoginFromCtx(ctx)
 
 	// 仅在未登录时需要 Hidden 信息做过滤
 	hiddenMap := map[string]bool{}

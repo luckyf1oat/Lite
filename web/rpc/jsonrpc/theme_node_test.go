@@ -210,6 +210,27 @@ func TestThemeNodeTrafficResetDayIsBeijingDayOfNextReset(t *testing.T) {
 	}
 }
 
+func TestToThemeNodeEmptyResetClockDoesNotPanic(t *testing.T) {
+	day := 21
+	node := sampleThemeClient(false, "secret-token")
+	node.TrafficResetDay = &day
+	node.TrafficResetTime = ""
+	node.TrafficResetTimezone = ""
+	var got ThemeNode
+	requireNotPanic := func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				t.Fatalf("toThemeNode panicked: %v", recovered)
+			}
+		}()
+		got = toThemeNode(node)
+	}
+	requireNotPanic()
+	if got.TrafficResetDay == nil || *got.TrafficResetDay != 21 {
+		t.Fatalf("empty clock should still expose reset day 21, got %v", got.TrafficResetDay)
+	}
+}
+
 func TestRPCClientsWithoutMCPOmitCapabilityFields(t *testing.T) {
 	node := sampleThemeClient(false, "secret-token")
 	node.MCPFull = true

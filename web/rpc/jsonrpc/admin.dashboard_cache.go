@@ -59,7 +59,16 @@ func (cache *dashboardModuleCache[T]) get(
 		if value, ok := cache.current(now, key, ttl); ok {
 			return value, nil
 		}
-		value, err := load()
+		var value T
+		var err error
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					err = fmt.Errorf("dashboard module panic: %v", recovered)
+				}
+			}()
+			value, err = load()
+		}()
 		if err != nil {
 			return nil, err
 		}
