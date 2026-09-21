@@ -451,6 +451,21 @@ func GetStore() *metric.Store {
 	return store
 }
 
+// SwapStoreForTest replaces the process-wide metric store. Tests must restore.
+func SwapStoreForTest(s *metric.Store) func() {
+	storeMu.Lock()
+	previous := store
+	store = s
+	storeMu.Unlock()
+	return func() {
+		storeMu.Lock()
+		if store == s {
+			store = previous
+		}
+		storeMu.Unlock()
+	}
+}
+
 // RetentionSummary is the compatibility view of all persisted metric policies.
 type RetentionSummary struct {
 	AllPositive bool

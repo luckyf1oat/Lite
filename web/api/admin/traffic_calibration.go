@@ -54,7 +54,17 @@ func GetTrafficCalibration(c *gin.Context) {
 		api.RespondError(c, http.StatusInternalServerError, "读取流量校准信息失败："+err.Error())
 		return
 	}
-	api.RespondSuccess(c, gin.H{"available": true, "snapshot": snapshot})
+	if !snapshot.HistoryComplete {
+		api.RespondSuccess(c, gin.H{
+			"available":        true,
+			"history_complete": false,
+			"client":           client.UUID,
+			"reason":           "当前周期首日流量已超过指标保留期，无法完整还原。请重新校准当前周期。",
+			"snapshot":         snapshot,
+		})
+		return
+	}
+	api.RespondSuccess(c, gin.H{"available": true, "history_complete": true, "snapshot": snapshot})
 }
 
 func UpdateTrafficCalibration(c *gin.Context) {

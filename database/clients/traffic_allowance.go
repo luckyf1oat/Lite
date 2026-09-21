@@ -31,6 +31,12 @@ func currentTrafficCycleAt(resetDay *int, clock, timezone string, now time.Time)
 
 func applyClientDisplayFields(client *models.Client, now time.Time) bool {
 	changed := false
+	if next, ok := trafficreset.RemapLegacyCustomCycleKey(
+		client.TrafficResetCycle, client.TrafficResetDay, client.TrafficResetTime, client.TrafficResetTimezone, now,
+	); ok {
+		client.TrafficResetCycle = next
+		changed = true
+	}
 	cycle := currentTrafficCycleAt(client.TrafficResetDay, client.TrafficResetTime, client.TrafficResetTimezone, now)
 	if client.TrafficResetAllowance < 0 || cycle == "" || client.TrafficResetCycle != cycle {
 		if client.TrafficResetAllowance != 0 || client.TrafficResetCycle != "" {
@@ -59,21 +65,20 @@ func applyClientDisplayFields(client *models.Client, now time.Time) bool {
 }
 
 func applyClientDisplayFieldsAndPersist(db *gorm.DB, clients []models.Client, now time.Time) error {
-	expired := make([]string, 0)
 	for index := range clients {
-		if applyClientDisplayFields(&clients[index], now) {
-			expired = append(expired, clients[index].UUID)
+		if !applyClientDisplayFields(&clients[index], now) {
+			continue
+		}
+		if err := db.Model(&models.Client{}).
+			Where("uuid = ?", clients[index].UUID).
+			Updates(map[string]any{
+				"traffic_reset_allowance": clients[index].TrafficResetAllowance,
+				"traffic_reset_cycle":     clients[index].TrafficResetCycle,
+			}).Error; err != nil {
+			return err
 		}
 	}
-	if len(expired) == 0 {
-		return nil
-	}
-	return db.Model(&models.Client{}).
-		Where("uuid IN ?", expired).
-		Updates(map[string]any{
-			"traffic_reset_allowance": 0,
-			"traffic_reset_cycle":     "",
-		}).Error
+	return nil
 }
 
 // EffectiveTrafficLimit returns the active quota and counting method for the

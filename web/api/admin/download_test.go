@@ -31,6 +31,7 @@ func createConfigSnapshotFixture(t *testing.T) string {
 		`CREATE TABLE logs (id INTEGER PRIMARY KEY, message TEXT)`,
 		`CREATE TABLE return_route_events (id INTEGER PRIMARY KEY, target TEXT)`,
 		`CREATE TABLE traffic_calibration_adjustments (id INTEGER PRIMARY KEY, client TEXT, day TEXT)`,
+		`CREATE TABLE traffic_cycle_first_days (client TEXT, cycle TEXT, up_bytes INTEGER, down_bytes INTEGER)`,
 		`INSERT INTO clients VALUES ('node-a', 'Node A')`,
 		`INSERT INTO users VALUES ('user-a', 'admin')`,
 		`INSERT INTO sessions VALUES ('session-a', 'user-a')`,
@@ -43,6 +44,7 @@ func createConfigSnapshotFixture(t *testing.T) string {
 		`INSERT INTO logs VALUES (1, 'log')`,
 		`INSERT INTO return_route_events VALUES (1, 'target')`,
 		`INSERT INTO traffic_calibration_adjustments VALUES (1, 'node-a', '2026-08-01')`,
+		`INSERT INTO traffic_cycle_first_days VALUES ('node-a', '2026-09-01T00:05:00+08:00', 10, 20)`,
 	}
 	for _, statement := range statements {
 		if _, err := db.Exec(statement); err != nil {
@@ -70,6 +72,7 @@ func TestSanitizeConfigSnapshotKeepsServersAndTasksWithoutHistory(t *testing.T) 
 		"users": 1, "clients": 1, "ping_tasks": 1, "return_route_tasks": 1,
 		"sessions": 0, "clipboards": 0, "logs": 0, "return_route_events": 0,
 		"traffic_calibration_adjustments": 0,
+		"traffic_cycle_first_days":        0,
 	} {
 		var got int
 		if err := db.QueryRow("SELECT COUNT(*) FROM " + quoteSQLiteIdentifier(table)).Scan(&got); err != nil {

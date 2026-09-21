@@ -38,6 +38,15 @@ type DeploymentDeliveryState struct {
 	FinishedAt *time.Time `json:"finished_at,omitempty"`
 }
 
+// ClientDispatch is the Agent-facing result of saving Client fields that may
+// also bump a persisted runtime config revision.
+type ClientDispatch struct {
+	RuntimeChanged bool
+	HasProfile     bool
+	Config         v2.ConfigParams
+	Delivery       DeploymentDeliveryState
+}
+
 // DeploymentProfile contains both runtime-manageable settings and values that
 // are retained solely to regenerate an installation command.
 type DeploymentProfile struct {
@@ -147,7 +156,10 @@ func GetDeploymentProfile(clientUUID string) (DeploymentProfile, bool, error) {
 }
 
 func GetDeploymentProfileWithDelivery(clientUUID string) (DeploymentProfile, bool, DeploymentDeliveryState, error) {
-	db := dbcore.GetDBInstance()
+	return getDeploymentProfileWithDelivery(dbcore.GetDBInstance(), clientUUID)
+}
+
+func getDeploymentProfileWithDelivery(db *gorm.DB, clientUUID string) (DeploymentProfile, bool, DeploymentDeliveryState, error) {
 	profile, saved, err := getDeploymentProfile(db, clientUUID)
 	if err != nil || !saved {
 		return profile, saved, DeploymentDeliveryState{}, err
@@ -157,6 +169,106 @@ func GetDeploymentProfileWithDelivery(clientUUID string) (DeploymentProfile, boo
 		return DeploymentProfile{}, false, DeploymentDeliveryState{}, err
 	}
 	return profile, true, deploymentDeliveryState(stored), nil
+}
+
+func RuntimeConfigForAgent(clientUUID string) (*v2.ConfigParams, error) {
+	return runtimeConfigForAgent(dbcore.GetDBInstance(), clientUUID)
+}
+
+func runtimeConfigForAgent(db *gorm.DB, clientUUID string) (*v2.ConfigParams, error) {
+	var clientInfo models.Client
+	if err := db.Select("uuid", "traffic_reset_day", "traffic_reset_time", "traffic_reset_timezone").
+		First(&clientInfo, "uuid = ?", clientUUID).Error; err != nil {
+		return nil, err
+	}
+	profile, saved, deliveryState, err := getDeploymentProfileWithDelivery(db, clientUUID)
+	if err != nil {
+		return nil, err
+	}
+	if saved {
+		config := profile.RuntimeConfig()
+		config.Revision = deliveryState.Revision
+		ApplyResetClock(&config, clientInfo)
+		return &config, nil
+	}
+	if clientInfo.TrafficResetDay == nil {
+		return nil, nil
+	}
+	config := AgentMonthRotateConfig(clientInfo)
+	return &config, nil
+}
+
+func syncDeploymentResetClock(db *gorm.DB, clientUUID string, previous, next models.Client) (ClientDispatch, error) {
+	if !db.Migrator().HasTable(&models.ClientDeploymentProfile{}) {
+		return ClientDispatch{Config: AgentMonthRotateConfig(next)}, nil
+	}
+	var stored models.ClientDeploymentProfile
+	err := db.First(&stored, "client = ?", clientUUID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ClientDispatch{Config: AgentMonthRotateConfig(next)}, nil
+	}
+	if err != nil {
+		return ClientDispatch{}, err
+	}
+
+	var profile DeploymentProfile
+	if err := json.Unmarshal([]byte(stored.Config), &profile); err != nil {
+		return ClientDispatch{}, fmt.Errorf("decode existing deployment profile: %w", err)
+	}
+	if err := normalizeDeploymentProfile(&profile); err != nil {
+		return ClientDispatch{}, fmt.Errorf("validate existing deployment profile: %w", err)
+	}
+
+	before := profile
+	overlayTrafficResetFromClient(&before, previous)
+	after := profile
+	overlayTrafficResetFromClient(&after, next)
+	if reflect.DeepEqual(before.RuntimeConfig(), after.RuntimeConfig()) {
+		config := after.RuntimeConfig()
+		config.Revision = stored.Revision
+		ApplyResetClock(&config, next)
+		return ClientDispatch{
+			HasProfile: true,
+			Config:     config,
+			Delivery:   deploymentDeliveryState(stored),
+		}, nil
+	}
+
+	encoded, err := json.Marshal(after)
+	if err != nil {
+		return ClientDispatch{}, fmt.Errorf("encode deployment profile: %w", err)
+	}
+	now := time.Now().UTC()
+	revision := stored.Revision + 1
+	if revision == 0 {
+		revision = 1
+	}
+	updates := map[string]any{
+		"config":              string(encoded),
+		"revision":            revision,
+		"delivery_status":     DeploymentDeliverySaved,
+		"delivery_error":      "",
+		"saved_at":            now,
+		"delivery_updated_at": now,
+		"sent_at":             nil,
+		"finished_at":         nil,
+		"updated_at":          now,
+	}
+	if err := db.Model(&models.ClientDeploymentProfile{}).Where("client = ?", clientUUID).Updates(updates).Error; err != nil {
+		return ClientDispatch{}, err
+	}
+	if err := db.First(&stored, "client = ?", clientUUID).Error; err != nil {
+		return ClientDispatch{}, err
+	}
+	config := after.RuntimeConfig()
+	config.Revision = stored.Revision
+	ApplyResetClock(&config, next)
+	return ClientDispatch{
+		RuntimeChanged: true,
+		HasProfile:     true,
+		Config:         config,
+		Delivery:       deploymentDeliveryState(stored),
+	}, nil
 }
 
 func getDeploymentProfile(db *gorm.DB, clientUUID string) (DeploymentProfile, bool, error) {

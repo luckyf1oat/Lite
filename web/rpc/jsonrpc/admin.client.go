@@ -135,16 +135,25 @@ func adminEditClient(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.Js
 	if uuid == "" {
 		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid or missing UUID", nil)
 	}
-	if err := clients.SaveClient(update); err != nil {
+	dispatch, err := clients.SaveClientForDispatch(update)
+	if err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, err.Error(), nil)
 	}
 	_, dayChanged := update["traffic_reset_day"]
 	_, timeChanged := update["traffic_reset_time"]
 	_, tzChanged := update["traffic_reset_timezone"]
 	if dayChanged || timeChanged || tzChanged {
-		if clientInfo, err := clients.GetClientByUUID(uuid); err == nil && clientInfo.TrafficResetDay != nil {
-			config := clients.AgentMonthRotateConfig(clientInfo)
-			agent_runtime.DispatchV2Event(uuid, v2.MethodAgentConfig, config)
+		if dispatch.RuntimeChanged {
+			_, sent, _ := agent_runtime.DispatchV2Config(uuid, dispatch.Config)
+			if sent {
+				if _, markErr := clients.MarkDeploymentConfigSent(uuid, dispatch.Delivery.Revision); markErr != nil {
+					return nil, rpc.MakeError(rpc.InternalError, "Failed to update deployment delivery state: "+markErr.Error(), nil)
+				}
+			}
+		} else if !dispatch.HasProfile {
+			if clientInfo, err := clients.GetClientByUUID(uuid); err == nil && clientInfo.TrafficResetDay != nil {
+				agent_runtime.DispatchV2Event(uuid, v2.MethodAgentConfig, clients.AgentMonthRotateConfig(clientInfo))
+			}
 		}
 	}
 	actor, ip := auditActor(ctx)

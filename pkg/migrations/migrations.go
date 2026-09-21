@@ -12,6 +12,7 @@ import (
 
 	"github.com/nuomiiiii/lite/database/models"
 	appconfig "github.com/nuomiiiii/lite/pkg/config"
+	"github.com/nuomiiiii/lite/pkg/trafficreset"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -139,6 +140,53 @@ func Run(ctx Context) error {
 		return fmt.Errorf("mark UTC timestamp migration done: %w", err)
 	}
 
+	return nil
+}
+
+// MigrateLegacyCustomTrafficCycleKeys remaps current-cycle YYYY-MM-DD keys for
+// custom reset clocks onto RFC3339 cycle identities after AutoMigrate.
+func MigrateLegacyCustomTrafficCycleKeys(db *gorm.DB, now time.Time) error {
+	if db == nil {
+		return fmt.Errorf("migration database is nil")
+	}
+	if !db.Migrator().HasTable(&models.Client{}) {
+		return nil
+	}
+	var clients []models.Client
+	if err := db.Select(
+		"uuid", "traffic_reset_day", "traffic_reset_time", "traffic_reset_timezone", "traffic_reset_cycle",
+	).Find(&clients).Error; err != nil {
+		return fmt.Errorf("list clients for custom cycle-key migration: %w", err)
+	}
+	hasAdjustments := db.Migrator().HasTable(&models.TrafficCalibrationAdjustment{})
+	for _, client := range clients {
+		civil, next, ok := trafficreset.LegacyCustomCycleKeys(
+			client.TrafficResetDay, client.TrafficResetTime, client.TrafficResetTimezone, now,
+		)
+		if !ok {
+			continue
+		}
+		if err := db.Transaction(func(tx *gorm.DB) error {
+			if strings.TrimSpace(client.TrafficResetCycle) == civil {
+				if err := tx.Model(&models.Client{}).
+					Where("uuid = ? AND traffic_reset_cycle = ?", client.UUID, civil).
+					Update("traffic_reset_cycle", next).Error; err != nil {
+					return fmt.Errorf("remap traffic reset cycle for client %s: %w", client.UUID, err)
+				}
+			}
+			if !hasAdjustments {
+				return nil
+			}
+			if err := tx.Model(&models.TrafficCalibrationAdjustment{}).
+				Where("client = ? AND cycle = ?", client.UUID, civil).
+				Update("cycle", next).Error; err != nil {
+				return fmt.Errorf("remap traffic calibrations for client %s: %w", client.UUID, err)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

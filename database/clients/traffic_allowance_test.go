@@ -35,8 +35,8 @@ func TestCurrentTrafficCycleUsesMostRecentBeijingResetDay(t *testing.T) {
 }
 
 func TestCurrentTrafficCycleUsesConfiguredTimezoneAndClock(t *testing.T) {
-	assert.Equal(t, "2026-08-15", currentTrafficCycleAt(trafficDay(15), "12:38:12", "UTC", time.Date(2026, 9, 15, 12, 38, 11, 0, time.UTC)))
-	assert.Equal(t, "2026-09-15", currentTrafficCycleAt(trafficDay(15), "12:38:12", "UTC", time.Date(2026, 9, 15, 12, 38, 12, 0, time.UTC)))
+	assert.Equal(t, "2026-08-15T12:38:12Z", currentTrafficCycleAt(trafficDay(15), "12:38:12", "UTC", time.Date(2026, 9, 15, 12, 38, 11, 0, time.UTC)))
+	assert.Equal(t, "2026-09-15T12:38:12Z", currentTrafficCycleAt(trafficDay(15), "12:38:12", "UTC", time.Date(2026, 9, 15, 12, 38, 12, 0, time.UTC)))
 }
 
 func TestApplyClientDisplayFieldsAddsCurrentCycleResetTraffic(t *testing.T) {
@@ -147,4 +147,62 @@ func TestLegacyClientTableMigratesResetAllowanceAndRegionOverride(t *testing.T) 
 	assert.Empty(t, migrated.RegionOverride)
 	assert.Zero(t, migrated.TrafficResetAllowance)
 	assert.Empty(t, migrated.TrafficResetCycle)
+}
+
+func TestApplyClientDisplayFieldsKeepsCurrentCustomCycleAllowance(t *testing.T) {
+	client := models.Client{
+		TrafficLimit: 100, TrafficLimitType: "sum", TrafficResetDay: trafficDay(15),
+		TrafficResetTime: "12:38:12", TrafficResetTimezone: "UTC",
+		TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15",
+	}
+	changed := applyClientDisplayFields(&client, time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC))
+	assert.True(t, changed)
+	assert.Equal(t, int64(50), client.TrafficResetAllowance)
+	assert.Equal(t, "2026-09-15T12:38:12Z", client.TrafficResetCycle)
+	assert.Equal(t, int64(150), client.EffectiveTrafficLimit)
+}
+
+func TestApplyClientDisplayFieldsDoesNotReuseOldPlanAfterClockChange(t *testing.T) {
+	client := models.Client{
+		TrafficLimit: 100, TrafficResetDay: trafficDay(15),
+		TrafficResetTime: "12:38:12", TrafficResetTimezone: "UTC",
+		TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15T00:00:00Z",
+	}
+	changed := applyClientDisplayFields(&client, time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC))
+	assert.True(t, changed)
+	assert.Zero(t, client.TrafficResetAllowance)
+	assert.Empty(t, client.TrafficResetCycle)
+}
+
+func TestApplyClientDisplayFieldsKeepsDefaultBeijingDateKey(t *testing.T) {
+	client := models.Client{
+		TrafficLimit: 100, TrafficResetDay: trafficDay(15),
+		TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15",
+	}
+	changed := applyClientDisplayFields(&client, time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC))
+	assert.False(t, changed)
+	assert.Equal(t, int64(50), client.TrafficResetAllowance)
+	assert.Equal(t, "2026-09-15", client.TrafficResetCycle)
+}
+
+func TestSaveClientRebindsAllowanceWhenResetTimeChanges(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:traffic-allowance-rebind-time?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&models.Client{}))
+	day := 15
+	require.NoError(t, db.Create(&models.Client{
+		UUID: "node-a", Token: "token-a", TrafficLimit: 100,
+		TrafficResetDay: &day, TrafficResetTime: "00:00:00", TrafficResetTimezone: "UTC",
+		TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15T00:00:00Z",
+	}).Error)
+
+	require.NoError(t, saveClient(db, map[string]interface{}{
+		"uuid":               "node-a",
+		"traffic_reset_time": "12:38:12",
+	}))
+	var client models.Client
+	require.NoError(t, db.First(&client, "uuid = ?", "node-a").Error)
+	assert.Equal(t, int64(50), client.TrafficResetAllowance)
+	assert.Equal(t, currentTrafficCycleAt(trafficDay(15), "12:38:12", "UTC", time.Now().UTC()), client.TrafficResetCycle)
+	assert.NotEqual(t, "2026-09-15T00:00:00Z", client.TrafficResetCycle)
 }

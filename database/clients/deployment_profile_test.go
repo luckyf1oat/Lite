@@ -2,8 +2,10 @@ package clients
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nuomiiiii/lite/database/models"
 	v2 "github.com/nuomiiiii/lite/protocol/v2"
@@ -11,6 +13,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+var errInjectedResetClock = errors.New("injected reset clock failure")
 
 func TestDeploymentProfileRuntimeConfigExcludesInstallationOnlyFields(t *testing.T) {
 	profile := DeploymentProfile{
@@ -150,10 +154,10 @@ func TestDeploymentProfileAndBillingEditorShareTrafficResetDay(t *testing.T) {
 	}
 
 	if err := saveClient(db, map[string]interface{}{
-		"uuid":                     "node-a",
-		"traffic_reset_day":        float64(9),
-		"traffic_reset_time":       "12:38:12",
-		"traffic_reset_timezone":   "UTC",
+		"uuid":                   "node-a",
+		"traffic_reset_day":      float64(9),
+		"traffic_reset_time":     "12:38:12",
+		"traffic_reset_timezone": "UTC",
 	}); err != nil {
 		t.Fatalf("save billing reset day: %v", err)
 	}
@@ -351,5 +355,167 @@ func TestDeploymentConfigDeliveryTracksOnlyRuntimeChangesAndRejectsStaleResults(
 	}
 	if !runtimeChanged || state.Revision != 3 || state.Status != DeploymentDeliverySaved {
 		t.Fatalf("retry delivery state = %+v, runtimeChanged=%v", state, runtimeChanged)
+	}
+}
+
+func TestSaveClientResetClockBumpsRevisionOnceAndLeavesUnchanged(t *testing.T) {
+	db, err := gorm.Open(
+		sqlite.Open("file:deployment-reset-clock-revision?mode=memory&cache=shared"),
+		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)},
+	)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := db.AutoMigrate(&models.Client{}, &models.ClientDeploymentProfile{}); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+	day := 15
+	if err := db.Create(&models.Client{
+		UUID: "node-reset", Token: "token-reset",
+		TrafficResetDay: &day, TrafficResetTime: "00:00:00", TrafficResetTimezone: "UTC",
+	}).Error; err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	profile := DeploymentProfile{
+		Platform: "linux", EnableInterval: true, Interval: 9,
+		EnableMonthRotate: true, MonthRotate: 15,
+		MonthRotateTime: "00:00:00", MonthRotateTimezone: "UTC",
+	}
+	if _, state, changed, err := saveDeploymentProfileForDispatch(db, "node-reset", profile); err != nil {
+		t.Fatalf("save initial profile: %v", err)
+	} else if !changed || state.Revision != 1 {
+		t.Fatalf("initial revision = %+v changed=%v", state, changed)
+	}
+	if marked, err := markDeploymentConfigSent(db, "node-reset", 1); err != nil || !marked {
+		t.Fatalf("mark sent: %v %v", marked, err)
+	}
+	if completed, err := completeDeploymentConfig(db, "node-reset", v2.ConfigResultParams{
+		Revision: 1, Status: DeploymentDeliveryApplied,
+	}); err != nil || !completed {
+		t.Fatalf("complete revision 1: %v %v", completed, err)
+	}
+	now := time.Now().UTC()
+	if err := db.Model(&models.ClientDeploymentProfile{}).Where("client = ?", "node-reset").Updates(map[string]any{
+		"revision": 7, "delivery_status": DeploymentDeliveryApplied, "finished_at": now,
+	}).Error; err != nil {
+		t.Fatalf("seed revision 7: %v", err)
+	}
+
+	dispatch, err := saveClientWithDispatch(db, map[string]interface{}{
+		"uuid":               "node-reset",
+		"traffic_reset_time": "12:38:12",
+	}, "")
+	if err != nil {
+		t.Fatalf("change reset time: %v", err)
+	}
+	if !dispatch.RuntimeChanged || !dispatch.HasProfile || dispatch.Delivery.Revision != 8 {
+		t.Fatalf("dispatch after time change = %+v", dispatch)
+	}
+	if dispatch.Config.Revision != 8 || dispatch.Config.MonthRotateTime == nil || *dispatch.Config.MonthRotateTime != "12:38:12" {
+		t.Fatalf("runtime config = %+v", dispatch.Config)
+	}
+	if dispatch.Config.Interval == nil || *dispatch.Config.Interval != 9 {
+		t.Fatalf("reset clock dispatch dropped interval: %+v", dispatch.Config)
+	}
+
+	pulled, err := runtimeConfigForAgent(db, "node-reset")
+	if err != nil || pulled == nil {
+		t.Fatalf("pull config: %v %#v", err, pulled)
+	}
+	if pulled.Revision != 8 || pulled.MonthRotateTime == nil || *pulled.MonthRotateTime != "12:38:12" {
+		t.Fatalf("offline pull = %+v", pulled)
+	}
+
+	dispatch, err = saveClientWithDispatch(db, map[string]interface{}{
+		"uuid":               "node-reset",
+		"traffic_reset_time": "12:38:12",
+	}, "")
+	if err != nil {
+		t.Fatalf("repeat identical time: %v", err)
+	}
+	if dispatch.RuntimeChanged || dispatch.Delivery.Revision != 8 {
+		t.Fatalf("identical save bumped revision: %+v", dispatch)
+	}
+
+	dispatch, err = saveClientWithDispatch(db, map[string]interface{}{
+		"uuid":                   "node-reset",
+		"traffic_reset_timezone": "Asia/Shanghai",
+	}, "")
+	if err != nil {
+		t.Fatalf("change timezone: %v", err)
+	}
+	if !dispatch.RuntimeChanged || dispatch.Delivery.Revision != 9 {
+		t.Fatalf("timezone change = %+v", dispatch)
+	}
+
+	dispatch, err = saveClientWithDispatch(db, map[string]interface{}{
+		"uuid":              "node-reset",
+		"traffic_reset_day": float64(16),
+	}, "")
+	if err != nil {
+		t.Fatalf("change day: %v", err)
+	}
+	if !dispatch.RuntimeChanged || dispatch.Delivery.Revision != 10 {
+		t.Fatalf("day change = %+v", dispatch)
+	}
+}
+
+func TestSaveClientResetClockKeepsClientAndRevisionAtomic(t *testing.T) {
+	db, err := gorm.Open(
+		sqlite.Open("file:deployment-reset-clock-atomic?mode=memory&cache=shared"),
+		&gorm.Config{Logger: logger.Default.LogMode(logger.Silent)},
+	)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := db.AutoMigrate(&models.Client{}, &models.ClientDeploymentProfile{}); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+	day := 15
+	if err := db.Create(&models.Client{
+		UUID: "node-atomic", Token: "token-atomic",
+		TrafficResetDay: &day, TrafficResetTime: "00:00:00", TrafficResetTimezone: "UTC",
+	}).Error; err != nil {
+		t.Fatalf("create client: %v", err)
+	}
+	profile := DeploymentProfile{Platform: "linux", EnableMonthRotate: true, MonthRotate: 15, MonthRotateTime: "00:00:00", MonthRotateTimezone: "UTC"}
+	if _, _, _, err := saveDeploymentProfileForDispatch(db, "node-atomic", profile); err != nil {
+		t.Fatalf("save profile: %v", err)
+	}
+
+	failNext := false
+	if err := db.Callback().Update().Before("gorm:update").Register("lite_fail_reset_profile", func(tx *gorm.DB) {
+		if failNext && tx.Statement != nil && tx.Statement.Table == "client_deployment_profiles" {
+			_ = tx.AddError(errInjectedResetClock)
+		}
+	}); err != nil {
+		t.Fatalf("register callback: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Callback().Update().Remove("lite_fail_reset_profile")
+	})
+
+	failNext = true
+	err = saveClient(db, map[string]interface{}{
+		"uuid":               "node-atomic",
+		"traffic_reset_time": "12:38:12",
+	})
+	if err == nil {
+		t.Fatal("expected injected profile update failure")
+	}
+
+	var client models.Client
+	if err := db.First(&client, "uuid = ?", "node-atomic").Error; err != nil {
+		t.Fatalf("reload client: %v", err)
+	}
+	if client.TrafficResetTime != "00:00:00" {
+		t.Fatalf("client time = %q, want rolled back 00:00:00", client.TrafficResetTime)
+	}
+	var stored models.ClientDeploymentProfile
+	if err := db.First(&stored, "client = ?", "node-atomic").Error; err != nil {
+		t.Fatalf("reload profile: %v", err)
+	}
+	if stored.Revision != 1 {
+		t.Fatalf("revision = %d, want rolled back 1", stored.Revision)
 	}
 }

@@ -347,3 +347,269 @@ func TestRunExpandsLegacyPingAllClientsTasks(t *testing.T) {
 		t.Fatalf("unexpected clients json: %s", raw)
 	}
 }
+
+func TestMigrateLegacyCustomTrafficCycleKeysRemapsCurrentCycle(t *testing.T) {
+	db := openTestDB(t, "migrations_custom_cycle_key")
+	if err := db.AutoMigrate(&models.Client{}, &models.TrafficCalibrationAdjustment{}); err != nil {
+		t.Fatalf("migrate tables: %v", err)
+	}
+	day := 15
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	clients := []models.Client{
+		{UUID: "custom-current", Token: "token-custom", TrafficResetDay: &day, TrafficResetTime: "12:38:12", TrafficResetTimezone: "UTC", TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15"},
+		{UUID: "custom-stale", Token: "token-stale", TrafficResetDay: &day, TrafficResetTime: "12:38:12", TrafficResetTimezone: "UTC", TrafficResetAllowance: 50, TrafficResetCycle: "2026-08-15"},
+		{UUID: "beijing-default", Token: "token-beijing", TrafficResetDay: &day, TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15"},
+		{UUID: "precise-old", Token: "token-precise", TrafficResetDay: &day, TrafficResetTime: "12:38:12", TrafficResetTimezone: "UTC", TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15T00:00:00Z"},
+	}
+	if err := db.Create(&clients).Error; err != nil {
+		t.Fatalf("seed clients: %v", err)
+	}
+	if err := db.Create(&models.TrafficCalibrationAdjustment{
+		CalibrationID: "cal-1", Client: "custom-current", Cycle: "2026-09-15", Day: "2026-09-16", UpDelta: 1,
+	}).Error; err != nil {
+		t.Fatalf("seed calibration: %v", err)
+	}
+
+	if err := MigrateLegacyCustomTrafficCycleKeys(db, now); err != nil {
+		t.Fatalf("migrate custom cycle keys: %v", err)
+	}
+
+	var remapped models.Client
+	if err := db.First(&remapped, "uuid = ?", "custom-current").Error; err != nil {
+		t.Fatalf("load remapped client: %v", err)
+	}
+	if remapped.TrafficResetCycle != "2026-09-15T12:38:12Z" || remapped.TrafficResetAllowance != 50 {
+		t.Fatalf("current custom cycle = %q allowance %d", remapped.TrafficResetCycle, remapped.TrafficResetAllowance)
+	}
+	var adjustment models.TrafficCalibrationAdjustment
+	if err := db.First(&adjustment, "client = ?", "custom-current").Error; err != nil {
+		t.Fatalf("load remapped calibration: %v", err)
+	}
+	if adjustment.Cycle != "2026-09-15T12:38:12Z" {
+		t.Fatalf("calibration cycle = %q", adjustment.Cycle)
+	}
+
+	var stale models.Client
+	if err := db.First(&stale, "uuid = ?", "custom-stale").Error; err != nil {
+		t.Fatalf("load stale client: %v", err)
+	}
+	if stale.TrafficResetCycle != "2026-08-15" {
+		t.Fatalf("stale custom cycle should wait for expire, got %q", stale.TrafficResetCycle)
+	}
+
+	var beijing models.Client
+	if err := db.First(&beijing, "uuid = ?", "beijing-default").Error; err != nil {
+		t.Fatalf("load beijing client: %v", err)
+	}
+	if beijing.TrafficResetCycle != "2026-09-15" {
+		t.Fatalf("default Beijing cycle = %q", beijing.TrafficResetCycle)
+	}
+
+	var precise models.Client
+	if err := db.First(&precise, "uuid = ?", "precise-old").Error; err != nil {
+		t.Fatalf("load precise client: %v", err)
+	}
+	if precise.TrafficResetCycle != "2026-09-15T00:00:00Z" {
+		t.Fatalf("previous precise key should stay until expire, got %q", precise.TrafficResetCycle)
+	}
+}
+
+func TestMigrateLegacyCustomTrafficCycleKeysRemapsCalibrationWithoutAllowance(t *testing.T) {
+	db := openTestDB(t, "migrations_custom_cycle_key_calibration_only")
+	if err := db.AutoMigrate(&models.Client{}, &models.TrafficCalibrationAdjustment{}); err != nil {
+		t.Fatalf("migrate tables: %v", err)
+	}
+	day := 15
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	if err := db.Create(&models.Client{
+		UUID: "cal-only", Token: "token-cal-only", TrafficResetDay: &day,
+		TrafficResetTime: "12:38:12", TrafficResetTimezone: "UTC",
+	}).Error; err != nil {
+		t.Fatalf("seed client: %v", err)
+	}
+	if err := db.Create(&models.TrafficCalibrationAdjustment{
+		CalibrationID: "cal-only", Client: "cal-only", Cycle: "2026-09-15", Day: "2026-09-16", UpDelta: 3,
+	}).Error; err != nil {
+		t.Fatalf("seed calibration: %v", err)
+	}
+
+	if err := MigrateLegacyCustomTrafficCycleKeys(db, now); err != nil {
+		t.Fatalf("migrate custom cycle keys: %v", err)
+	}
+
+	var client models.Client
+	if err := db.First(&client, "uuid = ?", "cal-only").Error; err != nil {
+		t.Fatalf("load client: %v", err)
+	}
+	if client.TrafficResetCycle != "" || client.TrafficResetAllowance != 0 {
+		t.Fatalf("calibration-only client cycle = %q allowance %d", client.TrafficResetCycle, client.TrafficResetAllowance)
+	}
+	var adjustment models.TrafficCalibrationAdjustment
+	if err := db.First(&adjustment, "client = ?", "cal-only").Error; err != nil {
+		t.Fatalf("load calibration: %v", err)
+	}
+	if adjustment.Cycle != "2026-09-15T12:38:12Z" {
+		t.Fatalf("calibration cycle = %q", adjustment.Cycle)
+	}
+}
+
+func TestMigrateLegacyCustomTrafficCycleKeysRollsBackWhenCalibrationUpdateFails(t *testing.T) {
+	db := openTestDB(t, "migrations_custom_cycle_key_rollback")
+	if err := db.AutoMigrate(&models.Client{}, &models.TrafficCalibrationAdjustment{}); err != nil {
+		t.Fatalf("migrate tables: %v", err)
+	}
+	day := 15
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	if err := db.Create(&models.Client{
+		UUID: "rollback", Token: "token-rollback", TrafficResetDay: &day,
+		TrafficResetTime: "12:38:12", TrafficResetTimezone: "UTC",
+		TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15",
+	}).Error; err != nil {
+		t.Fatalf("seed client: %v", err)
+	}
+	if err := db.Create(&models.TrafficCalibrationAdjustment{
+		CalibrationID: "cal-rollback", Client: "rollback", Cycle: "2026-09-15", Day: "2026-09-16", UpDelta: 1,
+	}).Error; err != nil {
+		t.Fatalf("seed calibration: %v", err)
+	}
+	if err := db.Exec(`CREATE TRIGGER fail_cal_update BEFORE UPDATE ON traffic_calibration_adjustments
+BEGIN
+	SELECT RAISE(ABORT, 'forced calibration remap failure');
+END;`).Error; err != nil {
+		t.Fatalf("create failing trigger: %v", err)
+	}
+
+	if err := MigrateLegacyCustomTrafficCycleKeys(db, now); err == nil {
+		t.Fatal("expected calibration remap failure")
+	}
+
+	var client models.Client
+	if err := db.First(&client, "uuid = ?", "rollback").Error; err != nil {
+		t.Fatalf("load client: %v", err)
+	}
+	if client.TrafficResetCycle != "2026-09-15" || client.TrafficResetAllowance != 50 {
+		t.Fatalf("rolled back client cycle = %q allowance %d", client.TrafficResetCycle, client.TrafficResetAllowance)
+	}
+	var adjustment models.TrafficCalibrationAdjustment
+	if err := db.First(&adjustment, "client = ?", "rollback").Error; err != nil {
+		t.Fatalf("load calibration: %v", err)
+	}
+	if adjustment.Cycle != "2026-09-15" {
+		t.Fatalf("rolled back calibration cycle = %q", adjustment.Cycle)
+	}
+}
+
+type lite223Client struct {
+	UUID                  string `gorm:"type:varchar(36);primaryKey"`
+	Token                 string `gorm:"type:varchar(255);unique;not null"`
+	Tags                  string `gorm:"type:text"`
+	TrafficResetDay       *int
+	TrafficResetAllowance int64  `gorm:"not null;default:0"`
+	TrafficResetCycle     string `gorm:"type:varchar(10);not null;default:''"`
+}
+
+func (lite223Client) TableName() string { return "clients" }
+
+type lite223Calibration struct {
+	ID            uint64 `gorm:"primaryKey"`
+	CalibrationID string `gorm:"type:varchar(32)"`
+	Client        string
+	Cycle         string `gorm:"type:varchar(10)"`
+	Day           string `gorm:"type:varchar(10)"`
+	UpDelta       int64
+	DownDelta     int64
+	TargetUp      int64
+	TargetDown    int64
+}
+
+func (lite223Calibration) TableName() string { return "traffic_calibration_adjustments" }
+
+func TestUpgradeFromLite223KeepsBeijingCycleAndCalibration(t *testing.T) {
+	db := openTestDB(t, "migrations_lite_223_cycle")
+	if err := db.AutoMigrate(&lite223Client{}, &lite223Calibration{}); err != nil {
+		t.Fatalf("create 2.2.3 tables: %v", err)
+	}
+	day := 15
+	if err := db.Create(&lite223Client{
+		UUID: "node-223", Token: "token-223", TrafficResetDay: &day,
+		TrafficResetAllowance: 50, TrafficResetCycle: "2026-09-15",
+	}).Error; err != nil {
+		t.Fatalf("seed 2.2.3 client: %v", err)
+	}
+	if err := db.Create(&lite223Calibration{
+		CalibrationID: "cal-223", Client: "node-223", Cycle: "2026-09-15", Day: "2026-09-16", UpDelta: 1,
+	}).Error; err != nil {
+		t.Fatalf("seed 2.2.3 calibration: %v", err)
+	}
+
+	if err := db.AutoMigrate(&models.Client{}, &models.TrafficCalibrationAdjustment{}); err != nil {
+		t.Fatalf("upgrade tables: %v", err)
+	}
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	if err := MigrateLegacyCustomTrafficCycleKeys(db, now); err != nil {
+		t.Fatalf("migrate after 2.2.3 upgrade: %v", err)
+	}
+
+	var client models.Client
+	if err := db.First(&client, "uuid = ?", "node-223").Error; err != nil {
+		t.Fatalf("load upgraded client: %v", err)
+	}
+	if client.TrafficResetCycle != "2026-09-15" || client.TrafficResetAllowance != 50 {
+		t.Fatalf("2.2.3 cycle = %q allowance %d", client.TrafficResetCycle, client.TrafficResetAllowance)
+	}
+	if client.TrafficResetTime != "00:00:00" && client.TrafficResetTime != "" {
+		t.Fatalf("2.2.3 reset time = %q, want default midnight", client.TrafficResetTime)
+	}
+
+	var adjustment models.TrafficCalibrationAdjustment
+	if err := db.First(&adjustment, "client = ?", "node-223").Error; err != nil {
+		t.Fatalf("load upgraded calibration: %v", err)
+	}
+	if adjustment.Cycle != "2026-09-15" {
+		t.Fatalf("2.2.3 calibration cycle = %q", adjustment.Cycle)
+	}
+}
+
+type upstreamClient struct {
+	UUID  string `gorm:"type:varchar(36);primaryKey"`
+	Token string `gorm:"type:varchar(255);unique;not null"`
+	Tags  string `gorm:"type:text"`
+}
+
+func (upstreamClient) TableName() string { return "clients" }
+
+func TestUpgradeFromUpstreamAdoptsTagResetDayWithoutRemappingCycle(t *testing.T) {
+	db := openTestDB(t, "migrations_upstream_cycle")
+	if err := db.AutoMigrate(&upstreamClient{}); err != nil {
+		t.Fatalf("create upstream client table: %v", err)
+	}
+	if err := db.Create(&upstreamClient{
+		UUID: "upstream-node", Token: "token-upstream", Tags: "Premium<blue>;<TRD:26>",
+	}).Error; err != nil {
+		t.Fatalf("seed upstream client: %v", err)
+	}
+	if err := db.AutoMigrate(&models.Client{}); err != nil {
+		t.Fatalf("upgrade client table: %v", err)
+	}
+	if err := MigrateTrafficResetDayFromTags(db); err != nil {
+		t.Fatalf("adopt upstream reset day: %v", err)
+	}
+	now := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+	if err := MigrateLegacyCustomTrafficCycleKeys(db, now); err != nil {
+		t.Fatalf("migrate after upstream upgrade: %v", err)
+	}
+
+	var client models.Client
+	if err := db.First(&client, "uuid = ?", "upstream-node").Error; err != nil {
+		t.Fatalf("load upgraded upstream client: %v", err)
+	}
+	if client.TrafficResetDay == nil || *client.TrafficResetDay != 26 {
+		t.Fatalf("upstream reset day = %v, want 26", client.TrafficResetDay)
+	}
+	if client.TrafficResetCycle != "" {
+		t.Fatalf("upstream cycle should stay empty, got %q", client.TrafficResetCycle)
+	}
+	if client.TrafficResetAllowance != 0 {
+		t.Fatalf("upstream allowance = %d, want 0", client.TrafficResetAllowance)
+	}
+}

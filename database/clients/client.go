@@ -19,8 +19,8 @@ import (
 	"github.com/nuomiiiii/lite/database/trafficledger"
 	"github.com/nuomiiiii/lite/pkg/config"
 	"github.com/nuomiiiii/lite/pkg/trafficreset"
-	"github.com/nuomiiiii/lite/utils"
 	v2 "github.com/nuomiiiii/lite/protocol/v2"
+	"github.com/nuomiiiii/lite/utils"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -95,6 +95,7 @@ func deleteClient(db *gorm.DB, clientUuid string) (bool, error) {
 			"offline notifications":           &models.OfflineNotification{},
 			"traffic report notifications":    &models.TrafficReportNotification{},
 			"traffic daily ledger":            &models.TrafficDailyLedger{},
+			"traffic cycle first days":        &models.TrafficCycleFirstDay{},
 			"traffic calibration adjustments": &models.TrafficCalibrationAdjustment{},
 			"ping loss notifications":         &models.PingLossNotification{},
 			"task results":                    &models.TaskResult{},
@@ -677,6 +678,10 @@ func SaveClient(updates map[string]interface{}) error {
 	return SaveClientWithSource(updates, billing.PriceSourceClientEdit)
 }
 
+func SaveClientForDispatch(updates map[string]interface{}) (ClientDispatch, error) {
+	return saveClientWithDispatch(dbcore.GetDBInstance(), updates, billing.PriceSourceClientEdit)
+}
+
 func saveClient(db *gorm.DB, updates map[string]interface{}) error {
 	return saveClientWithSource(db, updates, billing.PriceSourceClientEdit)
 }
@@ -686,6 +691,11 @@ func SaveClientWithSource(updates map[string]interface{}, source string) error {
 }
 
 func saveClientWithSource(db *gorm.DB, updates map[string]interface{}, source string) error {
+	_, err := saveClientWithDispatch(db, updates, source)
+	return err
+}
+
+func saveClientWithDispatch(db *gorm.DB, updates map[string]interface{}, source string) (ClientDispatch, error) {
 	if source == "" {
 		source = billing.PriceSourceClientEdit
 	}
@@ -693,38 +703,41 @@ func saveClientWithSource(db *gorm.DB, updates map[string]interface{}, source st
 	for key, value := range updates {
 		cloned[key] = value
 	}
+	var dispatch ClientDispatch
 	err := db.Transaction(func(tx *gorm.DB) error {
-		return saveClientTransaction(tx, cloned, source)
+		var err error
+		dispatch, err = saveClientTransaction(tx, cloned, source)
+		return err
 	})
 	if err != nil {
-		return err
+		return ClientDispatch{}, err
 	}
 	trafficledger.InvalidateCalibratedCycleCache()
-	return nil
+	return dispatch, nil
 }
 
-func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source string) error {
+func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source string) (ClientDispatch, error) {
 	clientUUID, ok := updates["uuid"].(string)
 	if !ok || clientUUID == "" {
-		return fmt.Errorf("invalid client UUID")
+		return ClientDispatch{}, fmt.Errorf("invalid client UUID")
 	}
 
 	// 确保更新的字段不为空
 	if len(updates) == 0 {
-		return fmt.Errorf("no fields to update")
+		return ClientDispatch{}, fmt.Errorf("no fields to update")
 	}
 
 	var existing models.Client
 	if err := db.Select("uuid", "name", "region", "group", "price", "billing_cycle", "currency", "expired_at", "region_override", "traffic_limit", "traffic_limit_type", "traffic_reset_day", "traffic_reset_time", "traffic_reset_timezone", "traffic_reset_allowance", "traffic_reset_cycle").
 		Where("uuid = ?", clientUUID).First(&existing).Error; err != nil {
-		return err
+		return ClientDispatch{}, err
 	}
 
 	if v, exists := updates["traffic_limit"]; exists {
 		if val, isFloat := v.(float64); isFloat {
 			numeric, ok := toInt64(val)
 			if !ok || numeric < 0 {
-				return fmt.Errorf("traffic_limit must be a valid non-negative int64 value, got %v", val)
+				return ClientDispatch{}, fmt.Errorf("traffic_limit must be a valid non-negative int64 value, got %v", val)
 			}
 			updates["traffic_limit"] = numeric
 		}
@@ -732,29 +745,29 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 	if value, exists := updates["traffic_limit_type"]; exists {
 		typeName, ok := value.(string)
 		if !ok {
-			return fmt.Errorf("traffic_limit_type must be a string")
+			return ClientDispatch{}, fmt.Errorf("traffic_limit_type must be a string")
 		}
 		normalized, err := normalizeTrafficType(typeName)
 		if err != nil {
-			return err
+			return ClientDispatch{}, err
 		}
 		updates["traffic_limit_type"] = normalized
 	}
 	if value, exists := updates["region_override"]; exists {
 		override, ok := value.(string)
 		if !ok {
-			return fmt.Errorf("region_override must be a string")
+			return ClientDispatch{}, fmt.Errorf("region_override must be a string")
 		}
 		normalized, err := normalizeRegionOverride(override)
 		if err != nil {
-			return err
+			return ClientDispatch{}, err
 		}
 		updates["region_override"] = normalized
 	}
 	if value, exists := updates["bandwidth"]; exists {
 		raw, ok := value.(string)
 		if !ok {
-			return fmt.Errorf("bandwidth must be a string")
+			return ClientDispatch{}, fmt.Errorf("bandwidth must be a string")
 		}
 		updates["bandwidth"] = normalizeBandwidth(raw)
 	}
@@ -762,7 +775,7 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 	if value, exists := updates["traffic_reset_day"]; exists {
 		normalized, err := normalizeTrafficResetDay(value)
 		if err != nil {
-			return err
+			return ClientDispatch{}, err
 		}
 		if normalized == nil {
 			updates["traffic_reset_day"] = nil
@@ -776,11 +789,11 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 	if value, exists := updates["traffic_reset_time"]; exists {
 		raw, ok := value.(string)
 		if !ok {
-			return fmt.Errorf("traffic_reset_time must be a string")
+			return ClientDispatch{}, fmt.Errorf("traffic_reset_time must be a string")
 		}
 		normalized, err := trafficreset.NormalizeClock(raw)
 		if err != nil {
-			return err
+			return ClientDispatch{}, err
 		}
 		resetTime = normalized
 		updates["traffic_reset_time"] = normalized
@@ -789,11 +802,11 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 	if value, exists := updates["traffic_reset_timezone"]; exists {
 		raw, ok := value.(string)
 		if !ok {
-			return fmt.Errorf("traffic_reset_timezone must be a string")
+			return ClientDispatch{}, fmt.Errorf("traffic_reset_timezone must be a string")
 		}
 		normalized, err := trafficreset.NormalizeTimezone(raw)
 		if err != nil {
-			return err
+			return ClientDispatch{}, err
 		}
 		resetTimezone = normalized
 		updates["traffic_reset_timezone"] = normalized
@@ -802,7 +815,7 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 	if value, exists := updates["traffic_reset_allowance"]; exists {
 		numeric, ok := toInt64(value)
 		if !ok || numeric < 0 {
-			return fmt.Errorf("traffic_reset_allowance must be a valid non-negative integer")
+			return ClientDispatch{}, fmt.Errorf("traffic_reset_allowance must be a valid non-negative integer")
 		}
 		resetAllowance = numeric
 		updates["traffic_reset_allowance"] = numeric
@@ -811,14 +824,14 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 		if resetAllowance > 0 {
 			cycle := currentTrafficCycleAt(resetDay, resetTime, resetTimezone, time.Now().UTC())
 			if cycle == "" {
-				return fmt.Errorf("set a traffic reset day from 1 to 31 before adding reset traffic")
+				return ClientDispatch{}, fmt.Errorf("set a traffic reset day from 1 to 31 before adding reset traffic")
 			}
 			limit := existing.TrafficLimit
 			if value, ok := updates["traffic_limit"]; ok {
 				limit, _ = toInt64(value)
 			}
 			if limit > math.MaxInt64-resetAllowance {
-				return fmt.Errorf("traffic limit plus reset traffic is too large")
+				return ClientDispatch{}, fmt.Errorf("traffic limit plus reset traffic is too large")
 			}
 			updates["traffic_reset_cycle"] = cycle
 		} else {
@@ -852,7 +865,7 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 	if value, exists := updates["currency"]; exists {
 		currency, ok := value.(string)
 		if !ok {
-			return fmt.Errorf("currency must be a string")
+			return ClientDispatch{}, fmt.Errorf("currency must be a string")
 		}
 		currency = strings.TrimSpace(currency)
 		if strings.EqualFold(currency, "CAD") || strings.EqualFold(currency, "CA$") || strings.EqualFold(currency, "C$") {
@@ -878,11 +891,11 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 		case string:
 			stamp, err := time.Parse(time.RFC3339Nano, typed)
 			if err != nil {
-				return fmt.Errorf("expired_at must be an RFC3339 timestamp with a timezone: %w", err)
+				return ClientDispatch{}, fmt.Errorf("expired_at must be an RFC3339 timestamp with a timezone: %w", err)
 			}
 			updates["expired_at"] = stamp.UTC()
 		default:
-			return fmt.Errorf("expired_at must be an RFC3339 timestamp with a timezone")
+			return ClientDispatch{}, fmt.Errorf("expired_at must be an RFC3339 timestamp with a timezone")
 		}
 	}
 
@@ -890,14 +903,28 @@ func saveClientTransaction(db *gorm.DB, updates map[string]interface{}, source s
 
 	if db.Migrator().HasTable(&models.BillingPriceVersion{}) {
 		if err := billing.CapturePriceVersion(db, existing, updates, source, time.Now().UTC()); err != nil {
-			return err
+			return ClientDispatch{}, err
 		}
 	}
-	err := db.Model(&models.Client{}).Where("uuid = ?", clientUUID).Updates(updates).Error
-	if err != nil {
-		return err
+	if err := db.Model(&models.Client{}).Where("uuid = ?", clientUUID).Updates(updates).Error; err != nil {
+		return ClientDispatch{}, err
 	}
-	return nil
+
+	_, dayChanged := updates["traffic_reset_day"]
+	_, timeChanged := updates["traffic_reset_time"]
+	_, tzChanged := updates["traffic_reset_timezone"]
+	if !dayChanged && !timeChanged && !tzChanged {
+		return ClientDispatch{}, nil
+	}
+	updated := existing
+	updated.TrafficResetDay = resetDay
+	updated.TrafficResetTime = resetTime
+	updated.TrafficResetTimezone = resetTimezone
+	dispatch, err := syncDeploymentResetClock(db, clientUUID, existing, updated)
+	if err != nil {
+		return ClientDispatch{}, err
+	}
+	return dispatch, nil
 }
 
 func toInt64(value interface{}) (int64, bool) {
@@ -1038,6 +1065,7 @@ func ApplyResetClock(config *v2.ConfigParams, client models.Client) {
 		return
 	}
 	reset := AgentMonthRotateConfig(client)
+	config.MonthRotate = reset.MonthRotate
 	config.MonthRotateTime = reset.MonthRotateTime
 	config.MonthRotateTimezone = reset.MonthRotateTimezone
 }

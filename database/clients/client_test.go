@@ -217,6 +217,7 @@ func TestDeleteClientCleansAllRelatedRowsAndSharedAssignments(t *testing.T) {
 				&models.OfflineNotification{},
 				&models.TrafficReportNotification{},
 				&models.TrafficDailyLedger{},
+				&models.TrafficCycleFirstDay{},
 				&models.LoadNotification{},
 				&models.LoadNotificationState{},
 				&models.MetricCleanupJob{},

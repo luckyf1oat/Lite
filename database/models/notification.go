@@ -77,6 +77,22 @@ type TrafficReportNotification struct {
 	IncludeBilling bool   `json:"include_billing" gorm:"type:boolean;default:false"` // 按服务器计费规则计算的流量
 }
 
+// TrafficCycleFirstDay stores post-reset usage for the first Beijing day of a
+// custom clock cycle so calibration can outlive metric retention.
+type TrafficCycleFirstDay struct {
+	Client       string    `json:"client" gorm:"type:varchar(36);primaryKey;not null"`
+	ClientInfo   Client    `json:"-" gorm:"foreignKey:Client;references:UUID;constraint:OnDelete:CASCADE,OnUpdate:CASCADE"`
+	Cycle        string    `json:"cycle" gorm:"type:varchar(64);primaryKey;not null"`
+	Day          string    `json:"day" gorm:"type:varchar(10);not null;index"`
+	UpBytes      int64     `json:"up_bytes" gorm:"type:bigint;not null;default:0"`
+	DownBytes    int64     `json:"down_bytes" gorm:"type:bigint;not null;default:0"`
+	CoveredUntil time.Time `json:"covered_until" gorm:"type:timestamp"`
+	Sealed       bool      `json:"sealed" gorm:"not null;default:false"`
+	Recovered    bool      `json:"recovered" gorm:"not null;default:false"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
 // TrafficDailyLedger stores exact report traffic for one Beijing calendar day.
 // The daily ledger is intentionally separate from the general metric store so
 // weekly and monthly reports do not require long retention for four metrics.
@@ -97,7 +113,7 @@ type TrafficCalibrationAdjustment struct {
 	CalibrationID string    `json:"calibration_id" gorm:"type:varchar(32);not null;index;uniqueIndex:idx_traffic_calibration_day"`
 	Client        string    `json:"client" gorm:"type:varchar(36);not null;index;constraint:OnDelete:CASCADE,OnUpdate:CASCADE;foreignKey:Client;references:UUID"`
 	ClientInfo    Client    `json:"-" gorm:"foreignKey:Client;references:UUID;constraint:OnDelete:CASCADE,OnUpdate:CASCADE"`
-	Cycle         string    `json:"cycle" gorm:"type:varchar(10);not null;index"`
+	Cycle         string    `json:"cycle" gorm:"type:varchar(64);not null;index"`
 	Day           string    `json:"day" gorm:"type:varchar(10);not null;index;uniqueIndex:idx_traffic_calibration_day"`
 	UpDelta       int64     `json:"up_delta" gorm:"type:bigint;not null;default:0"`
 	DownDelta     int64     `json:"down_delta" gorm:"type:bigint;not null;default:0"`

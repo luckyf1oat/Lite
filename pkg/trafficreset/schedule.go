@@ -171,12 +171,65 @@ func (s Schedule) Next(now time.Time) time.Time {
 	return s.boundary(year, month)
 }
 
-func (s Schedule) CycleKey(now time.Time) string {
+func beijingTimezone(name string) bool {
+	name = strings.TrimSpace(name)
+	return name == "" || name == DefaultTimezone || name == "Asia/Chongqing" || name == "PRC"
+}
+
+// UsesLegacyCycleKey is true for the default Asia/Shanghai 00:00:00 plan whose
+// stored cycle records remain YYYY-MM-DD.
+func (s Schedule) UsesLegacyCycleKey() bool {
+	return s.Hour == 0 && s.Minute == 0 && s.Second == 0 && beijingTimezone(s.Timezone)
+}
+
+func (s Schedule) CivilDateKey(now time.Time) string {
 	last := s.Last(now)
 	if last.IsZero() {
 		return ""
 	}
 	return last.In(s.loc()).Format(time.DateOnly)
+}
+
+func (s Schedule) CycleKey(now time.Time) string {
+	last := s.Last(now)
+	if last.IsZero() {
+		return ""
+	}
+	if s.UsesLegacyCycleKey() {
+		return last.In(s.loc()).Format(time.DateOnly)
+	}
+	return last.UTC().Format(time.RFC3339)
+}
+
+// LegacyCustomCycleKeys returns the current civil date key and RFC3339 key for
+// a custom plan. Default Beijing midnight plans keep date-only keys.
+func LegacyCustomCycleKeys(day *int, clock, timezone string, now time.Time) (civil, precise string, ok bool) {
+	schedule := FromFields(day, clock, timezone)
+	if !schedule.Active() || schedule.UsesLegacyCycleKey() {
+		return "", "", false
+	}
+	civil = schedule.CivilDateKey(now)
+	precise = schedule.CycleKey(now)
+	if civil == "" || precise == "" {
+		return "", "", false
+	}
+	return civil, precise, true
+}
+
+// RemapLegacyCustomCycleKey upgrades a pre-RFC3339 YYYY-MM-DD key for a
+// custom plan that is still in that civil cycle. Default Beijing midnight
+// plans keep date-only keys. A stored RFC3339 key is left unchanged so a
+// later time or timezone edit cannot reuse the previous plan's records.
+func RemapLegacyCustomCycleKey(stored string, day *int, clock, timezone string, now time.Time) (string, bool) {
+	civil, precise, ok := LegacyCustomCycleKeys(day, clock, timezone, now)
+	if !ok {
+		return stored, false
+	}
+	stored = strings.TrimSpace(stored)
+	if stored == "" || strings.Contains(stored, "T") || stored != civil {
+		return stored, false
+	}
+	return precise, true
 }
 
 func (s Schedule) FormatNext(now time.Time) string {

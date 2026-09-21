@@ -1021,6 +1021,7 @@ func doInitialize() error {
 		&models.OfflineNotification{},
 		&models.TrafficReportNotification{},
 		&models.TrafficDailyLedger{},
+		&models.TrafficCycleFirstDay{},
 		&models.TrafficCalibrationAdjustment{},
 		&models.PingTask{},
 		&models.PingLossNotification{},
@@ -1070,6 +1071,9 @@ func doInitialize() error {
 	}
 	if err := migrations.MigrateTrafficResetDayFromTags(instance); err != nil {
 		return fmt.Errorf("failed to migrate traffic reset days: %w", err)
+	}
+	if err := migrations.MigrateLegacyCustomTrafficCycleKeys(instance, time.Now().UTC()); err != nil {
+		return fmt.Errorf("failed to migrate custom traffic cycle keys: %w", err)
 	}
 	if err := instance.AutoMigrate(
 		&models.Session{},
@@ -1167,6 +1171,7 @@ func cleanupOrphanedClientData(db *gorm.DB) error {
 			"offline notifications":           &models.OfflineNotification{},
 			"traffic report notifications":    &models.TrafficReportNotification{},
 			"traffic daily ledger":            &models.TrafficDailyLedger{},
+			"traffic cycle first days":        &models.TrafficCycleFirstDay{},
 			"traffic calibration adjustments": &models.TrafficCalibrationAdjustment{},
 		} {
 			if !tx.Migrator().HasTable(model) {

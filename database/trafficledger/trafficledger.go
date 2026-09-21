@@ -258,6 +258,9 @@ func maintainWithDailyCalculator(ctx context.Context, db *gorm.DB, now time.Time
 		if err := ensureRangeWithDailyCalculator(ctx, db, clientIDs, dashboardStart, today, calculate); err != nil {
 			return err
 		}
+		if err := persistCycleFirstDays(ctx, db, now); err != nil {
+			return err
+		}
 	}
 	for _, target := range targets {
 		cutoff := dayKey(today.AddDate(0, 0, -target.retentionDays))

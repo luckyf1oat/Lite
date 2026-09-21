@@ -11,6 +11,8 @@ __debug*
 
 # local development data
 lite.db
+*.db-shm
+*.db-wal
 /data
 /utils/geoip/data
 .vscode/
