@@ -170,9 +170,14 @@ func normalizeSiteFactoryDefaults() error {
 	}
 	updates := map[string]any{
 		config.ReduceMotionKey: false,
-		// 批量自注册默认关闭：只有显式开启后端点才存在，现状部署方式不受影响。
-		config.EnrollEnabledKey:    false,
-		config.EnrollMaxPerHourKey: 60,
+	}
+	// 批量自注册只补默认值，不覆盖管理员已保存的设置：这个函数每次启动都会执行，
+	// 无条件写入会把开启状态重置掉。
+	if _, exists := all[config.EnrollEnabledKey]; !exists {
+		updates[config.EnrollEnabledKey] = false
+	}
+	if _, exists := all[config.EnrollMaxPerHourKey]; !exists {
+		updates[config.EnrollMaxPerHourKey] = 60
 	}
 	migrated, _ := all[config.SiteFactoryDefaultsKey].(bool)
 	if !migrated {
