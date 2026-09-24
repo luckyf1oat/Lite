@@ -1,0 +1,146 @@
+name: Build fork binary
+
+# 手动构建本 fork 的完整二进制（含系统 UI 与内置主题），供自有部署使用。
+#
+# 与上游 release.yml 的差异：
+#   - 前端显式从上游 nuomiiiii/Lite-web 与 nuomiiiii/Lite-theme 克隆
+#     （build-frontend action 默认按当前 owner 推断仓库，在 fork 中会指向不存在的地址）。
+#   - 只产出 artifact，不创建 Release、不推 Docker。
+#
+# 用法：Actions → Build fork binary → Run workflow。
+
+on:
+  workflow_dispatch:
+    inputs:
+      goarch:
+        description: "目标架构"
+        required: true
+        default: "amd64"
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - amd64,arm64
+      web_ref:
+        description: "Lite-web 标签/分支"
+        required: true
+        default: "2.3.4"
+        type: string
+      theme_ref:
+        description: "Lite-theme 标签/分支"
+        required: true
+        default: "v1.1.2"
+        type: string
+      inject_version:
+        description: "写入二进制的版本号（留空则用 git describe）"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goarch: ${{ fromJSON(format('["{0}"]', replace(inputs.goarch, ',', '","'))) }}
+        include:
+          - goarch: amd64
+            zig_target_triple: x86_64-linux-musl
+          - goarch: arm64
+            zig_target_triple: aarch64-linux-musl
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build system UI and bundled theme
+        uses: ./.github/actions/build-frontend
+        with:
+          repository: https://github.com/nuomiiiii/Lite-web
+          ref: ${{ inputs.web_ref }}
+          theme-repository: https://github.com/nuomiiiii/Lite-theme
+          theme-ref: ${{ inputs.theme_ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.8"
+          check-latest: false
+
+      - name: Confirm Go 1.26.8
+        run: |
+          set -euo pipefail
+          go version
+          test "$(go env GOVERSION)" = "go1.26.8"
+          echo "GOTOOLCHAIN=local" >> "$GITHUB_ENV"
+
+      - name: Install Zig cross-compiler toolchain
+        uses: ./.github/actions/setup-zig
+
+      - name: Verify embedded frontend resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f web/public/systemUI/dist/index.html
+          test -f web/public/bundledThemes/Lite-theme/Lite-theme.json
+          test -f web/public/bundledThemes/Lite-theme/dist/index.html
+
+      - name: Build binary
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: zig cc -target ${{ matrix.zig_target_triple }}
+          GIN_MODE: release
+          REQUESTED_VERSION: ${{ inputs.inject_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${REQUESTED_VERSION:-$(git describe --tags --always 2>/dev/null || echo 0.0.0)}"
+          VERSION_HASH="$(git rev-parse HEAD)"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "VERSION_HASH=${VERSION_HASH}" >> "$GITHUB_ENV"
+          BINARY_NAME="Lite-linux-${GOARCH}"
+          go build -trimpath \
+            -ldflags="-s -w -X github.com/nuomiiiii/lite/utils.CurrentVersion=${VERSION} -X github.com/nuomiiiii/lite/utils.VersionHash=${VERSION_HASH}" \
+            -o "$BINARY_NAME"
+          ls -lh "$BINARY_NAME"
+          sha256sum "$BINARY_NAME" | tee "$BINARY_NAME.sha256"
+
+      - name: Smoke test the binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "Lite-linux-${{ matrix.goarch }}"
+          "Lite-linux-${{ matrix.goarch }}" version
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lite-linux-${{ matrix.goarch }}
+          path: |
+            Lite-linux-${{ matrix.goarch }}
+            Lite-linux-${{ matrix.goarch }}.sha256
+          retention-days: 30
+
+      - name: Build summary
+        shell: bash
+        run: |
+          {
+            echo "### Lite-linux-${{ matrix.goarch }}"
+            echo ""
+            echo "- version: ${VERSION}"
+            echo "- commit: ${VERSION_HASH}"
+            echo "- Lite-web: ${{ inputs.web_ref }}"
+            echo "- Lite-theme: ${{ inputs.theme_ref }}"
+            echo "- cgo: zig cc -target ${{ matrix.zig_target_triple }}"
+            echo ""
+            echo '```'
+            cat "Lite-linux-${{ matrix.goarch }}.sha256"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
