@@ -23,7 +23,20 @@ const (
 	maxBinary          = 256 << 20
 )
 
-var releaseBaseURL = "https://github.com/nuomiiiii/Lite/releases/download"
+// defaultReleaseBaseURL points at this fork's own releases, not upstream.
+//
+// 上游地址是 https://github.com/nuomiiiii/Lite/releases/download。本分支带有上游
+// 没有的功能，若沿用上游地址，"立即更新"会把二进制换回上游版本并静默丢失这些功能，
+// 因此默认只从本 fork 拉取。可通过 LITE_UPDATE_BASE_URL 覆盖。
+const defaultReleaseBaseURL = "https://github.com/luckyf1oat/Lite/releases/download"
+
+var releaseBaseURL = defaultReleaseBaseURL
+
+func init() {
+	if override := strings.TrimSpace(os.Getenv("LITE_UPDATE_BASE_URL")); override != "" {
+		releaseBaseURL = strings.TrimRight(override, "/")
+	}
+}
 
 var (
 	versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)

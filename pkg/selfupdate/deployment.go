@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nuomiiiii/lite/cmd/flags"
@@ -66,10 +67,52 @@ func DeploymentType() string {
 	return DeploymentUnknown
 }
 
+// selfUpdateEnabledKey opts this fork's binary back into the in-place updater.
+//
+// 本分支默认关闭一键更新：更新器只会从 releaseBaseURL 下载，而"版本 + 哈希"是
+// 由前端按上游 releases 展示的，误点一次就会用上游二进制覆盖本分支。需要自更新时，
+// 在服务单元里设置 LITE_SELF_UPDATE_ENABLED=1（配合 fork 自己的 release 资产）。
+const selfUpdateEnabledKey = "LITE_SELF_UPDATE_ENABLED"
+
+// selfUpdateEnabled reports whether the in-place updater may run. It defaults to
+// disabled unless the environment explicitly opts in.
+var selfUpdateEnabled atomic.Bool
+
+func init() {
+	selfUpdateEnabled.Store(envEnabled(firstEnv(selfUpdateEnabledKey)))
+}
+
+// envEnabled reports whether value is an explicit affirmative.
+func envEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on", "enabled":
+		return true
+	}
+	return false
+}
+
+// SetSelfUpdateEnabledForTest overrides the opt-in flag and returns a restore
+// function.
+func SetSelfUpdateEnabledForTest(enabled bool) func() {
+	previous := selfUpdateEnabled.Swap(enabled)
+	return func() { selfUpdateEnabled.Store(previous) }
+}
+
+// SelfUpdateEnabled reports the current opt-in state.
+func SelfUpdateEnabled() bool {
+	return selfUpdateEnabled.Load()
+}
+
 func DetectCapability() Capability {
 	deployment := DeploymentType()
 	result := Capability{Deployment: deployment}
 	result.Distribution, result.DistributionVersion = linuxDistribution()
+	if !selfUpdateEnabled.Load() {
+		// Checked before anything else so a disabled updater cannot download,
+		// verify or swap a binary even on an otherwise fully supported host.
+		result.Reason = "self_update_disabled_in_this_fork"
+		return result
+	}
 	if deployment != DeploymentLinux || runtime.GOOS != "linux" {
 		result.Reason = "not_managed_linux"
 		return result
