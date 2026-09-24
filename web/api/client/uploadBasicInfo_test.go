@@ -72,7 +72,7 @@ func TestV2BasicInfoFillsRegionFromGeoIP(t *testing.T) {
 			},
 		},
 		ID: "basic-info",
-	}, false)
+	}, false, "203.0.113.7")
 	if resp.Error != nil {
 		t.Fatalf("v2 basic info failed: %+v", resp.Error)
 	}
@@ -128,7 +128,7 @@ func TestV2BasicInfoSynchronizesCurrentAgentRuntimeConfig(t *testing.T) {
 			},
 		},
 		ID: "basic-info-runtime-config",
-	}, false)
+	}, false, "203.0.113.8")
 	if resp.Error != nil {
 		t.Fatalf("v2 basic info failed: %+v", resp.Error)
 	}

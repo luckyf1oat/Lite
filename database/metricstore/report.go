@@ -35,8 +35,14 @@ type reportTrafficValues struct {
 var reportTrafficStates sync.Map
 
 const (
-	reportBatchInterval         = 3 * time.Second
-	reportBatchQueueSize        = 256
+	// reportBatchInterval is how often queued agent reports are flushed. A
+	// shorter tick keeps each transaction's point count bounded while still
+	// coalescing one cadence worth of a large fleet into a single write.
+	reportBatchInterval = 1 * time.Second
+	// reportBatchQueueSize bounds how many reports may wait for the next flush.
+	// It must comfortably exceed the number of nodes reporting within one
+	// interval; a full queue rejects reports with ErrReportBatchQueueFull.
+	reportBatchQueueSize        = 8192
 	reportBatchWriteTimeout     = 10 * time.Second
 	reportTrafficRateMultiplier = int64(4)
 	reportTrafficRateAllowance  = int64(64 * 1024 * 1024)
@@ -305,6 +311,12 @@ func writeReportBatch(ctx context.Context, reports []v2.Report) ([]v2.Report, er
 	s := GetStore()
 	if s == nil {
 		return nil, fmt.Errorf("metric store not enabled")
+	}
+	// Every metric has been disabled: there is nothing to prepare, write or
+	// remember. Returning here keeps per-node traffic bookkeeping and point
+	// construction off a WebSSH-only deployment's report path entirely.
+	if !s.AcceptsWrites() {
+		return reports, nil
 	}
 
 	prepared := make([]v2.Report, len(reports))

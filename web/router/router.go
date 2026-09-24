@@ -226,6 +226,7 @@ func registerAdminRoutes(r *gin.Engine) {
 		clientGroup.GET("/:uuid/traffic-daily", jsonRpc.Bind("admin:getClientTrafficDaily", jsonRpc.WithPath("uuid"), jsonRpc.WithRaw()))
 		clientGroup.POST("/token/rotate", api.RejectAPIKey(), api.RequireSensitive2FA(), jsonRpc.Bind("admin:rotateClientToken"))
 		clientGroup.POST("/order", jsonRpc.Bind("admin:orderClients"))
+		clientGroup.POST("/name", jsonRpc.Bind("admin:nameClients"))
 	}
 
 	// records

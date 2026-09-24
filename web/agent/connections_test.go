@@ -8,7 +8,13 @@ import (
 	"github.com/nuomiiiii/lite/web/connection"
 )
 
-func TestRecordReportKeepsLatestAndShortRecentWindow(t *testing.T) {
+func TestRecordReportKeepsLatestAndScalesRecentWindow(t *testing.T) {
+	// The recent raw window follows the fleet's report interval, so the test
+	// pins a short cadence to exercise the short-window path.
+	previousInterval := reportIntervalSeconds.Load()
+	reportIntervalSeconds.Store(45)
+	t.Cleanup(func() { reportIntervalSeconds.Store(previousInterval) })
+
 	mu.Lock()
 	previousLatest := latestReport
 	previousRecent := recentReports
@@ -23,6 +29,8 @@ func TestRecordReportKeepsLatestAndShortRecentWindow(t *testing.T) {
 	})
 
 	now := time.Now().UTC()
+	// 45 * 1.5 = 67.5s window: the 2 minute old sample falls outside it while
+	// the 30s and 45s old samples are both retained.
 	RecordReport(v2.Report{UUID: "node-a", UpdatedAt: now.Add(-2 * time.Minute), CPU: v2.CPUReport{Usage: 10}})
 	RecordReport(v2.Report{UUID: "node-a", UpdatedAt: now.Add(-30 * time.Second), CPU: v2.CPUReport{Usage: 20}})
 	RecordReport(v2.Report{UUID: "node-a", UpdatedAt: now.Add(-45 * time.Second), CPU: v2.CPUReport{Usage: 15}})
@@ -48,6 +56,29 @@ func TestRecordReportKeepsLatestAndShortRecentWindow(t *testing.T) {
 	DeleteLatestReport("node-a")
 	if len(GetRecentReports("node-a")) != 0 || GetLatestReport()["node-a"] != nil {
 		t.Fatal("deleting latest report did not clear runtime report state")
+	}
+}
+
+func TestRecentReportWindowFollowsReportInterval(t *testing.T) {
+	tests := []struct {
+		name     string
+		interval int64
+		want     time.Duration
+	}{
+		{"fast cadence floors at the minimum", 3, recentReportMinWindow},
+		{"one minute", 60, 90 * time.Second},
+		{"ten minutes", 600, 15 * time.Minute},
+		{"very slow cadence caps at the maximum", 3600, recentReportRetention},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			previous := reportIntervalSeconds.Load()
+			reportIntervalSeconds.Store(test.interval)
+			t.Cleanup(func() { reportIntervalSeconds.Store(previous) })
+			if got := RecentReportWindow(); got != test.want {
+				t.Fatalf("RecentReportWindow() = %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

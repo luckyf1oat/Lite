@@ -23,7 +23,11 @@ var (
 	mu = sync.RWMutex{}
 )
 
-const recentReportRetention = time.Minute
+// recentReportRetention is the ceiling for the in-memory raw report window. The
+// effective window follows the fleet's report interval (see ReportWindow) so a
+// deployment with a long cadence keeps one or two samples per node rather than
+// a fixed minute's worth.
+const recentReportRetention = 20 * time.Minute
 
 func GetConnectedClients() map[string]*connection.SafeConn {
 	mu.RLock()
@@ -158,7 +162,9 @@ func GetLatestReport() map[string]*v2.Report {
 }
 
 // RecordReport updates the latest runtime state and keeps only the short raw
-// window used by recent-status compatibility endpoints.
+// window used by recent-status compatibility endpoints. The window scales with
+// the fleet's report interval (see RecentReportWindow) so a WebSSH-only fleet
+// with a long cadence stores one or two samples per node instead of twenty.
 func RecordReport(report v2.Report) {
 	if report.UUID == "" {
 		return
@@ -171,13 +177,14 @@ func RecordReport(report v2.Report) {
 	} else {
 		report.UpdatedAt = report.UpdatedAt.UTC()
 	}
+	window := RecentReportWindow()
 	mu.Lock()
 	defer mu.Unlock()
 	if latest := latestReport[report.UUID]; latest == nil || !report.UpdatedAt.Before(latest.UpdatedAt) {
 		item := report
 		latestReport[report.UUID] = &item
 	}
-	cutoff := time.Now().UTC().Add(-recentReportRetention)
+	cutoff := time.Now().UTC().Add(-window)
 	reports := reportsAfter(recentReports[report.UUID], cutoff)
 	if report.UpdatedAt.Before(cutoff) {
 		recentReports[report.UUID] = reports
@@ -193,9 +200,10 @@ func RecordReport(report v2.Report) {
 }
 
 func GetRecentReports(uuid string) []v2.Report {
+	window := RecentReportWindow()
 	mu.Lock()
 	defer mu.Unlock()
-	reports := reportsAfter(recentReports[uuid], time.Now().UTC().Add(-recentReportRetention))
+	reports := reportsAfter(recentReports[uuid], time.Now().UTC().Add(-window))
 	if len(reports) == 0 {
 		delete(recentReports, uuid)
 		return []v2.Report{}

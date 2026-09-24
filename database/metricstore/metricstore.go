@@ -287,8 +287,24 @@ func openStoreWithDefaultRetentionAndProgress(ctx context.Context, cfg *MetricSt
 		s.Close()
 		return nil, fmt.Errorf("failed to create metric definitions: %w", err)
 	}
+	// Seed the store-wide write switch so the report fast path is correct
+	// immediately, including for a deployment whose metrics are all disabled.
+	if err := s.RefreshWriteAcceptance(ctx); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("failed to evaluate metric write policy: %w", err)
+	}
 
 	return s, nil
+}
+
+// RefreshWriteAcceptance recomputes the process-wide store's write switch from
+// its metric definitions. It must be called after any retention policy change.
+func RefreshWriteAcceptance(ctx context.Context) error {
+	s := GetStore()
+	if s == nil {
+		return nil
+	}
+	return s.RefreshWriteAcceptance(ctx)
 }
 
 // OpenStore opens an isolated metric store using the supplied configuration.

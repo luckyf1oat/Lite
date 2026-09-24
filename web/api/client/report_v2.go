@@ -42,7 +42,9 @@ func bindV2Params[T any](raw any, target *T) error {
 	return json.Unmarshal(b, target)
 }
 
-func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
+// handleV2RPC processes one agent request. fallbackIP is the caller's remote
+// address, used only when a basic-info report omits the node's own addresses.
+func handleV2RPC(uuid string, req v2.Request, allowWait bool, fallbackIP string) v2.Response {
 	if req.JSONRPC != v2.Version {
 		return v2.Error(req.ID, -32600, "invalid jsonrpc version", nil)
 	}
@@ -64,7 +66,7 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 		if err := bindV2Params(req.Params, &params); err != nil {
 			return v2.Error(req.ID, -32602, "invalid basic info params", err.Error())
 		}
-		if err := ingestBasicInfo(uuid, params.Info, ""); err != nil {
+		if err := ingestBasicInfo(uuid, params.Info, fallbackIP); err != nil {
 			return v2.Error(req.ID, -32000, "failed to save basic info", err.Error())
 		}
 		if params.ConfigState != nil {
@@ -156,7 +158,7 @@ func UploadV2RPC(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, v2.Error(req.ID, -32001, "invalid token", nil))
 		return
 	}
-	resp := handleV2RPC(uuid, req, true)
+	resp := handleV2RPC(uuid, req, true, c.ClientIP())
 	status := http.StatusOK
 	if resp.Error != nil {
 		status = http.StatusBadRequest
@@ -169,7 +171,7 @@ func WebSocketV2RPC(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "Require WebSocket upgrade"})
 		return
 	}
-	unsafeConn, err := api.UpgradeWebSocket(c, api.EnableWebSocketCompression, api.AllowAgentWebSocket)
+	unsafeConn, err := api.UpgradeWebSocket(c, api.EnableWebSocketCompression, api.AllowAgentWebSocket, api.WithAgentWebSocketBuffers)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "error", "error": "Failed to upgrade to WebSocket." + err.Error()})
 		return
@@ -211,7 +213,7 @@ func WebSocketV2RPC(c *gin.Context) {
 			conn.WriteJSON(v2.Error(nil, -32700, "parse error", err.Error()))
 			continue
 		}
-		resp := handleV2RPC(uuid, req, false)
+		resp := handleV2RPC(uuid, req, false, c.ClientIP())
 		if req.ID != nil {
 			if err := conn.WriteJSON(resp); err != nil {
 				logger.Errorf("client-api", "failed to write v2 rpc response: %v", err)

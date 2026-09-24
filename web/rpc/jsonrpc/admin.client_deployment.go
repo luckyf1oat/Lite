@@ -64,6 +64,10 @@ func adminSaveClientDeploymentProfile(ctx context.Context, req *rpc.JsonRpcReque
 		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
 	}
 
+	// A fleet-wide cadence change also resizes the in-memory recent-report
+	// window so a WebSSH-only fleet stops holding a full minute per node.
+	agent_runtime.RefreshRecentReportWindow()
+
 	delivery := "saved"
 	if runtimeChanged {
 		runtimeConfig := profile.RuntimeConfig()

@@ -18,7 +18,16 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// defaultReportInterval is the reporting cadence used when a node's deployment
+// profile does not set one explicitly.
 const defaultReportInterval = 3.0
+
+// DefaultDeploymentIntervalSeconds is the reporting cadence applied to newly
+// created deployment profiles. The deployment path is expected to be a
+// WebSSH-only fleet, where the loosest allowed cadence keeps the master's
+// ingestion and storage work negligible. It is overridable through the
+// client_default_interval_seconds setting.
+var DefaultDeploymentIntervalSeconds = 600.0
 
 const (
 	DeploymentDeliverySaved      = "saved"
@@ -107,7 +116,14 @@ func (profile *DeploymentProfile) UnmarshalJSON(data []byte) error {
 }
 
 func defaultDeploymentProfile(client models.Client) DeploymentProfile {
-	profile := DeploymentProfile{Platform: "linux"}
+	profile := DeploymentProfile{
+		Platform: "linux",
+		// New nodes are deployed for remote management (WebSSH) by default and
+		// report on the fleet's default cadence instead of every 3 seconds.
+		EnableRemoteControl: true,
+		EnableInterval:      true,
+		Interval:            DefaultDeploymentIntervalSeconds,
+	}
 	overlayTrafficResetFromClient(&profile, client)
 	return profile
 }

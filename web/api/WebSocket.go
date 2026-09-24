@@ -38,6 +38,20 @@ func AllowAgentWebSocket(upgrader *websocket.Upgrader) {
 	}
 }
 
+// AgentWebSocketBufferBytes is the per-connection I/O buffer size for
+// agent-facing sockets. Agent protocol frames are small JSON documents, so the
+// 4096-byte gorilla default wastes roughly 8 KiB per connection; at ten
+// thousand nodes that is on the order of 80 MiB. 1024 still accommodates a
+// full report frame and is the documented minimum.
+const AgentWebSocketBufferBytes = 1024
+
+// WithAgentWebSocketBuffers shrinks the per-connection read and write buffers
+// for a socket that only carries small control and report frames.
+func WithAgentWebSocketBuffers(upgrader *websocket.Upgrader) {
+	upgrader.ReadBufferSize = AgentWebSocketBufferBytes
+	upgrader.WriteBufferSize = AgentWebSocketBufferBytes
+}
+
 func UpgradeWebSocket(c *gin.Context, options ...WebSocketUpgradeOption) (*websocket.Conn, error) {
 	if !IsWebSocketUpgrade(c) {
 		return nil, fmt.Errorf("require websocket upgrade")

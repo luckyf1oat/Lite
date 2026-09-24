@@ -6,6 +6,7 @@ import (
 	"fmt"
 	logger "github.com/nuomiiiii/lite/utils/log"
 	"math"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,10 @@ func DeleteClient(clientUuid string) error {
 		return err
 	}
 	deleted = true
+	// Drop the node's naming bookkeeping so a deleted node leaves no state.
+	if nodeNamer != nil {
+		nodeNamer.Forget(clientUuid)
+	}
 	if err := metricstore.ProcessPendingCleanupJobs(context.Background(), db); err != nil {
 		logger.Errorf("metricstore", "Client %s was deleted; metric cleanup remains queued: %v", clientUuid, err)
 	}
@@ -227,6 +232,88 @@ func autoOrderNewClientsEnabled() bool {
 	return enabled
 }
 
+// NameProposal is the locally known automatic-naming state for one node.
+type NameProposal struct {
+	// Candidate is a ready-to-persist name, or "" when none is available yet.
+	Candidate string
+	// NeedsLookup asks the caller to queue an asynchronous egress lookup.
+	NeedsLookup bool
+}
+
+// NodeNamer proposes and queues automatic node names. It is implemented by
+// web/clientname and injected at startup. A nil namer disables the feature, and
+// because the interface carries no network work, the agent report path stays
+// free of upstream calls.
+type NodeNamer interface {
+	Propose(uuid, currentName, ip string) NameProposal
+	Submit(uuid, ip string)
+	Forget(uuid string)
+}
+
+var nodeNamer NodeNamer
+
+// SetNodeNamer installs the automatic naming implementation. Called once during
+// startup, before the HTTP server starts accepting reports. Passing nil (or a
+// typed nil implementation) disables the feature.
+func SetNodeNamer(namer NodeNamer) {
+	if namer == nil || reflect.ValueOf(namer).Kind() == reflect.Ptr && reflect.ValueOf(namer).IsNil() {
+		nodeNamer = nil
+		return
+	}
+	nodeNamer = namer
+}
+
+// CurrentNodeNamer exposes the installed namer to administrative backfill.
+func CurrentNodeNamer() NodeNamer {
+	return nodeNamer
+}
+
+// proposeNodeName fills the name field of an outgoing client update when the
+// node still carries its registration placeholder. It is deliberately
+// allocation-light: the only work done here is a cache lookup.
+func proposeNodeName(update map[string]interface{}, current models.Client) {
+	if nodeNamer == nil {
+		return
+	}
+	if _, exists := update["name"]; exists {
+		return // an explicit name in the same payload always wins
+	}
+	// Prefer the address carried by this very report; fall back to the stored
+	// one so a node whose report omits IPs is still named once they are known.
+	ip := firstNonEmptyString(
+		stringField(update, "ipv4"),
+		stringField(update, "ipv6"),
+		current.IPv4,
+		current.IPv6,
+	)
+	proposal := nodeNamer.Propose(current.UUID, current.Name, ip)
+	if proposal.Candidate != "" {
+		update["name"] = proposal.Candidate
+		update["name_auto_generated"] = true
+		return
+	}
+	if proposal.NeedsLookup && ip != "" {
+		nodeNamer.Submit(current.UUID, ip)
+	}
+}
+
+func stringField(update map[string]interface{}, key string) string {
+	value, ok := update[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 func saveClientInfo(db *gorm.DB, update map[string]interface{}) error {
 	return saveClientInfoWithAutoOrder(db, update, true)
 }
@@ -336,9 +423,14 @@ func saveClientInfoWithAutoOrder(db *gorm.DB, update map[string]interface{}, aut
 
 	return db.Transaction(func(tx *gorm.DB) error {
 		var current models.Client
-		if err := tx.Select("uuid", "region", "region_override").Where("uuid = ?", clientUUID).First(&current).Error; err != nil {
+		if err := tx.Select("uuid", "name", "ipv4", "ipv6", "name_auto_generated", "region", "region_override").
+			Where("uuid = ?", clientUUID).First(&current).Error; err != nil {
 			return err
 		}
+
+		// Automatic naming runs before the update so the generated name and the
+		// rest of the report's fields land in one statement.
+		proposeNodeName(update, current)
 
 		if err := tx.Model(&models.Client{}).Where("uuid = ?", clientUUID).Updates(update).Error; err != nil {
 			return err

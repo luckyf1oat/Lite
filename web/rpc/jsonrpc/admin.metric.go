@@ -113,6 +113,11 @@ func adminUpdateMetricDefinition(ctx context.Context, req *rpc.JsonRpcRequest) (
 	if params.RetentionDays == 0 {
 		metricstore.DeleteMetricDataAsync(params.Name)
 	}
+	// Keep the store-wide write switch in step with the new policy so a fully
+	// disabled telemetry set stops paying for the write path on the next report.
+	if err := metricstore.RefreshWriteAcceptance(ctx); err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to refresh metric write policy: "+err.Error(), nil)
+	}
 
 	actor, ip := auditActor(ctx)
 	auditlog.Log(ip, actor, "update metric definition: "+params.Name, "info")

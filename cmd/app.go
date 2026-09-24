@@ -40,6 +40,7 @@ import (
 	"github.com/nuomiiiii/lite/utils/notifier"
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
 	"github.com/nuomiiiii/lite/web/api"
+	"github.com/nuomiiiii/lite/web/clientname"
 	installweb "github.com/nuomiiiii/lite/web/install"
 	"github.com/nuomiiiii/lite/web/mcp"
 	"github.com/nuomiiiii/lite/web/oauth"
@@ -339,6 +340,16 @@ func (a *App) InitProviders() error {
 	go geoip.InitGeoIp()
 	a.addCleanup("geoip", func(context.Context) error {
 		return geoip.Shutdown()
+	})
+
+	// 自动节点命名：出口信息解析器与有界工作池。
+	shutdownNamer, err := clientname.Initialize()
+	if err != nil {
+		return fmt.Errorf("failed to initialize client naming: %w", err)
+	}
+	agent_runtime.RefreshRecentReportWindow()
+	a.addCleanup("client-naming", func(context.Context) error {
+		return shutdownNamer()
 	})
 
 	// 消息发送 provider。

@@ -40,6 +40,7 @@ Lite 是一款轻量、自托管的服务器监控与运维管理工具。服务
 | 回程线路 | 电信、移动、联通线路识别，切线与恢复判断、BGP 规则自动更新、监测记录与通知，以及需主动开启的 IP 疑似被墙实验功能 |
 | 通知与报告 | 通用通知、离线通知、负载当前告警与单机静默、延迟丢包告警、流量告警，以及日/周/月流量报告；离线、丢包和流量报告支持新服务器默认配置 |
 | 远程管理 | 多会话 Web 终端、文件管理、命令剪贴板与远程任务执行；需要同时开启站点和 Agent 本地开关，并完成管理员重新验证 |
+| 探针部署与命名 | 部署指令默认 **600 秒采集 + 开启远程控制**，适配只做 WebSSH 的探针；Agent 首次连上后按出口探测自动命名为「国家代码-IP-ASN-ISP」，上游无结果时保留默认名称，管理员改过的名称永不被覆盖 |
 | MCP 代理 | AI 客户端接入、按节点临时授权、命令与文件操作、交互终端、并发限制、操作记录及授权撤销 |
 | 数据与存储 | SQLite 占用明细、运行诊断、历史分层、上游 1.3.1/1.4.x 数据迁移、WAL 维护、手动空间回收、完整备份恢复和仅配置导出 |
 | 接入与安全 | 管理员登录、双因素认证、单点登录、会话管理、API 与 WebSocket Origin 校验、内置 HTTPS、反向代理和 Cloudflare Tunnel |
@@ -112,6 +113,23 @@ Lite `2.3.4` 推荐配套 [Lite-agent `2.3.3.5`](https://github.com/nuomiiiii/Li
 
 在线配置支持采集间隔、流量重置日、网卡、挂载点、内存缓存计入方式与 GPU 监控的保存、下发和结果确认。远程控制开关等安装选项需要更新节点本地启动参数并重启或重新安装 Agent。安装、日志、更新和卸载步骤见[Agent 安装与维护](https://nuomiiiii.github.io/Lite-document/install/agent)，操作方式见[远程终端与文件](https://nuomiiiii.github.io/Lite-document/remote/terminal)。
 
+### 探针一键部署与自动命名
+
+新节点无需额外配置：部署指令默认使用 **600 秒采集间隔**并**开启远程控制**，适合只通过 WebSSH 管理、不需要监控曲线的探针。添加节点后复制“节点配置 → 部署指令”执行即可。
+
+Agent 首次上报基础信息后，Lite 会按出口探测结果自动把占位名称改为：
+
+```
+国家代码-IP地址-ASN-ISP      例：CN-203.0.113.7-AS4837-China Unicom
+```
+
+- 默认探测 `https://ipecho.5671234.xyz/?format=json`，可用 `client_naming_echo_url` 换成自建服务；**无结果或请求失败时保留默认名称**。
+- 上报路径只查本地缓存、**不发起网络请求**；真正的探测由固定的小并发工作池执行，结果按 IP 缓存 6 小时、失败按 10 分钟负缓存，因此万级节点同时上线也不会打爆上游或拖慢上报。
+- 只有名称仍是占位符 `client_xxxx` 时才会被自动命名，**管理员手动改过的名称永远不会被覆盖**。
+- 历史节点可用 `admin:nameClients` 一次性补齐（`{"all":true}` 处理全部未命名节点）。
+
+只做 WebSSH 时，建议把各指标**保留期设为 0**（`admin:updateMetricDefinition`）并关闭通知、GeoIP、访客审计与 MCP，可把磁盘写入降到 0、主控内存降到几百 MB；此时上报、在线状态与远程终端均不受影响。完整参数、批量脚本与验证清单见[WebSSH-only 部署与节点自动命名](docs/webssh-only-deployment.md)。
+
 ### MCP 代理与 AI 授权
 
 1. 使用配套 Lite-agent，并开启上述站点和 Agent 远程控制开关，再开启“系统设置 → 通用 → 启用 MCP 代理”。
@@ -169,6 +187,8 @@ go build -o Lite
 ## 相关链接
 
 - [版本发布与完整更新日志](https://github.com/nuomiiiii/lite/releases)
+- [WebSSH-only 部署与节点自动命名](docs/webssh-only-deployment.md)
+- [Linux 一键更新与回退](docs/self-update.md)
 - [Lite 文档](https://nuomiiiii.github.io/Lite-document/)
 - [Telegram 群组](https://t.me/komari_lite)
 - [Lite Agent](https://github.com/nuomiiiii/Lite-agent)

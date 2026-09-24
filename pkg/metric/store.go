@@ -65,6 +65,14 @@ type Store struct {
 	// retentionMu serializes a retention change with writes and compaction so a
 	// disabled metric cannot be repopulated by an in-flight operation.
 	retentionMu sync.RWMutex
+	// metricWriteMu guards writesDisabled.
+	metricWriteMu sync.RWMutex
+	// writesDisabled is set once every metric definition has been disabled, so
+	// the whole write path can short-circuit. It stays false until
+	// RefreshWriteAcceptance observes an all-disabled policy, which keeps the
+	// per-point retention filter authoritative for any store that never ran the
+	// refresh (for example a store opened by a test helper).
+	writesDisabled bool
 	// mu protects closed state.
 	//
 	// mu 保护 closed 状态。
@@ -88,6 +96,46 @@ type Store struct {
 // physical series and must therefore be omitted from storage maintenance jobs.
 func (s *Store) IsVirtualMetric(metricName string) bool {
 	return s != nil && s.sqlitePingMerged && metricName == sqliteVirtualPingLossMetric
+}
+
+// AcceptsWrites reports whether the store may still persist points. It returns
+// true until RefreshWriteAcceptance has observed that every metric definition is
+// disabled, so callers that never refresh keep the historical behaviour.
+func (s *Store) AcceptsWrites() bool {
+	if s == nil {
+		return false
+	}
+	s.metricWriteMu.RLock()
+	defer s.metricWriteMu.RUnlock()
+	return !s.writesDisabled
+}
+
+// RefreshWriteAcceptance recomputes the store-wide write switch from the
+// current metric definitions. Call it after the store opens and whenever a
+// retention policy changes, so the fast path stays correct without a read on
+// every write.
+func (s *Store) RefreshWriteAcceptance(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	defs, err := s.ListMetrics(ctx)
+	if err != nil {
+		return err
+	}
+	accepts := false
+	for _, def := range defs {
+		if s.IsVirtualMetric(def.Name) {
+			continue
+		}
+		if def.RetentionDays > 0 {
+			accepts = true
+			break
+		}
+	}
+	s.metricWriteMu.Lock()
+	s.writesDisabled = !accepts
+	s.metricWriteMu.Unlock()
+	return nil
 }
 
 // Open initializes a Store from a Config.
@@ -1053,6 +1101,12 @@ func (s *Store) WriteBatch(ctx context.Context, points []Point) error {
 		return err
 	}
 	if len(points) == 0 {
+		return nil
+	}
+	// Fast path: when every metric definition has been disabled there is nothing
+	// to store. Skipping here avoids taking the retention lock and re-listing
+	// definitions for a fleet whose telemetry is intentionally switched off.
+	if !s.AcceptsWrites() {
 		return nil
 	}
 	if s.sqlitePingMerged {
