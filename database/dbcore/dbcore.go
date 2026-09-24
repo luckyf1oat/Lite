@@ -1013,6 +1013,8 @@ func doInitialize() error {
 		&models.PasskeyCredential{},
 		&models.Client{},
 		&models.ClientDeploymentProfile{},
+		&models.EnrollmentKey{},
+		&models.EnrolledNode{},
 		&models.Log{},
 		&models.Clipboard{},
 		&models.LoadNotification{},

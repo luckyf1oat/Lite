@@ -35,6 +35,8 @@ func Register(r *gin.Engine) {
 // registerPublicRoutes 公开路由。JSON 读接口经 Bind 绑定到 public: 命名空间方法。
 func registerPublicRoutes(r *gin.Engine) {
 	installweb.RegisterCompleted(r)
+	// 批量自注册脚本的下载入口（enroll 关闭时返回 404）。
+	installweb.RegisterAgentScript(r)
 
 	// 非 JSON / 特殊流程，保留 REST handler。
 	r.POST("/api/login", public_api.Login)
@@ -48,6 +50,10 @@ func registerPublicRoutes(r *gin.Engine) {
 	// /api/clients 是 WebSocket 端点（客户端发 "get"/"get <uuid>" 拉取在线列表与最新上报），
 	// 非 JSON-RPC，保留为 WS handler。
 	r.GET("/api/clients", api.GetClients)
+
+	// 批量自注册：同一条指令在任意多台机器执行，各机领取自己的节点身份。
+	// 默认关闭（enroll_enabled=false），关闭时返回 404，与现状一致。
+	r.POST("/api/clients/enroll", public_api.Enroll)
 
 	// JSON 接口 -> RPC2。
 	r.GET("/api/me", jsonRpc.Bind("public:getMe", jsonRpc.WithRaw()))

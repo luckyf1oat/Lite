@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -35,6 +36,22 @@ var (
 func GetAs[T any](key string, defaul ...any) (T, error) {
 	var t T
 	var item ConfigItem
+
+	// 未绑定数据库时（例如单元测试进程）返回错误而不是解引用 nil，
+	// 让调用方走各自的默认值分支。
+	if db == nil {
+		if len(defaul) > 0 {
+			if v, ok := defaul[0].(T); ok {
+				return v, nil
+			}
+			val := reflect.ValueOf(&t).Elem()
+			if err := convertAndSet(defaul[0], val); err != nil {
+				return t, fmt.Errorf("default value type mismatch: expected %T, got %T", t, defaul[0])
+			}
+			return t, nil
+		}
+		return t, errors.New("config store is not initialized")
+	}
 
 	err := db.First(&item, "key = ?", key).Error
 	if err != nil {
@@ -76,6 +93,15 @@ func GetAs[T any](key string, defaul ...any) (T, error) {
 func GetMany(keys map[string]any) (map[string]any, error) {
 	var items []ConfigItem
 	result := make(map[string]any)
+	// 未绑定数据库时直接返回调用方提供的默认值，避免解引用 nil。
+	if db == nil {
+		for k, def := range keys {
+			if def != nil {
+				result[k] = def
+			}
+		}
+		return result, nil
+	}
 	keyList := make([]string, 0, len(keys))
 	for k := range keys {
 		keyList = append(keyList, k)
@@ -357,6 +383,10 @@ func convertAndSet(val any, fieldVal reflect.Value) error {
 func GetAll() (map[string]any, error) {
 	var items []ConfigItem
 	result := make(map[string]any)
+	// 未绑定数据库时返回空快照，而不是解引用 nil。
+	if db == nil {
+		return result, nil
+	}
 	if err := db.Find(&items).Error; err != nil {
 		return nil, err
 	}

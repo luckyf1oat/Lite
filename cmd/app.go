@@ -40,6 +40,7 @@ import (
 	"github.com/nuomiiiii/lite/utils/notifier"
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
 	"github.com/nuomiiiii/lite/web/api"
+	public_api "github.com/nuomiiiii/lite/web/api/public"
 	"github.com/nuomiiiii/lite/web/clientname"
 	installweb "github.com/nuomiiiii/lite/web/install"
 	"github.com/nuomiiiii/lite/web/mcp"
@@ -169,6 +170,9 @@ func normalizeSiteFactoryDefaults() error {
 	}
 	updates := map[string]any{
 		config.ReduceMotionKey: false,
+		// 批量自注册默认关闭：只有显式开启后端点才存在，现状部署方式不受影响。
+		config.EnrollEnabledKey:    false,
+		config.EnrollMaxPerHourKey: 60,
 	}
 	migrated, _ := all[config.SiteFactoryDefaultsKey].(bool)
 	if !migrated {
@@ -726,6 +730,18 @@ func (a *App) registerReloadHandlers(cors *security.CorsController) {
 		}
 	})
 
+	// 批量自注册开关切换。端点与脚本路由读取配置实时判定，这里只做审计。
+	a.reload.Register("enroll", func(event config.ConfigEvent) {
+		if event.IsChanged(config.EnrollEnabledKey) {
+			enabled, _ := config.GetAs[bool](config.EnrollEnabledKey, false)
+			if enabled {
+				logger.Infof("server", "Bulk enrollment endpoint enabled at /api/clients/enroll")
+			} else {
+				logger.Infof("server", "Bulk enrollment endpoint disabled")
+			}
+		}
+	})
+
 	// CORS 配置热更新。
 	a.reload.Register("cors", func(event config.ConfigEvent) {
 		cors.Update(event)
@@ -951,7 +967,18 @@ func cleanupScheduledData() {
 	if err := tasks.CleanupMainlandReachabilityData(); err != nil {
 		logger.Errorf("server", "Failed to clean mainland reachability samples: %v", err)
 	}
+	// 回收「用 enroll 密钥注册了但从未上报」的孤儿节点，并释放其注册配额。
+	if removed, err := public_api.CleanupEnrolledNodes(enrolledNodeOrphanTTL); err != nil {
+		logger.Errorf("server", "Failed to clean orphaned enrolled nodes: %v", err)
+	} else if removed > 0 {
+		logger.Infof("server", "Removed %d enrolled node(s) that never reported", removed)
+	}
 }
+
+// enrolledNodeOrphanTTL bounds how long a node registered through an enrollment
+// key may stay silent before it is reclaimed. It is long enough for a slow
+// install and short enough that a leaked key cannot permanently pollute the list.
+const enrolledNodeOrphanTTL = 60 * time.Minute
 
 func compactMetricStore(ctx context.Context) {
 	compactCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)

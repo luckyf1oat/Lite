@@ -135,4 +135,11 @@ const (
 	XtermjsSettingsKey             = "xtermjs_settings"
 	DashboardSettingsKey           = "dashboard_settings"
 	ThemeMarketSourcesKey          = "theme_market_sources"
+
+	// EnrollEnabledKey 控制批量自注册端点（/api/clients/enroll）是否可用。
+	// 默认关闭：关闭时端点返回 404，现有部署方式完全不受影响。
+	EnrollEnabledKey = "enroll_enabled"
+	// EnrollMaxPerHourKey 是单个来源 IP 每小时的注册次数上限。
+	// 设 0 表示仅使用密钥自身的次数上限。
+	EnrollMaxPerHourKey = "enroll_max_per_hour"
 )

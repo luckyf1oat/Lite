@@ -10,6 +10,7 @@ import (
 	"github.com/nuomiiiii/lite/database/tasks"
 	v2 "github.com/nuomiiiii/lite/protocol/v2"
 	agent_runtime "github.com/nuomiiiii/lite/web/agent"
+	public_api "github.com/nuomiiiii/lite/web/api/public"
 	"github.com/nuomiiiii/lite/web/mcp"
 )
 
@@ -30,6 +31,9 @@ func ingestReport(uuid string, report v2.Report, markPresence bool) error {
 		return err
 	}
 	agent_runtime.RecordReport(savedReport)
+	// A node registered through an enrollment key is only considered "landed"
+	// once it reports; the orphan sweeper reclaims nodes that never do.
+	public_api.MarkEnrolledNodeReported(uuid, time.Now().UTC())
 	if markPresence {
 		refreshPostPresence(uuid)
 	}
