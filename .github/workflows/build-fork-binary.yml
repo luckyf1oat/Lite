@@ -12,15 +12,6 @@ name: Build fork binary
 on:
   workflow_dispatch:
     inputs:
-      only:
-        description: "只构建某个架构（默认两个都构建）"
-        required: false
-        default: "all"
-        type: choice
-        options:
-          - all
-          - amd64
-          - arm64
       web_ref:
         description: "Lite-web 标签/分支"
         required: true
@@ -51,8 +42,6 @@ jobs:
             zig_target_triple: x86_64-linux-musl
           - goarch: arm64
             zig_target_triple: aarch64-linux-musl
-    # 输入为 all 或留空时两个架构都构建，否则只构建选中的那个。
-    if: ${{ inputs.only == 'all' || inputs.only == '' || inputs.only == matrix.goarch }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
