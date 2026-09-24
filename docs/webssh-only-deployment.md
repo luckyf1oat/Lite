@@ -201,3 +201,48 @@ ls -l ./data/metrics.db
   `client_naming_echo_url`。
 - 已存在且名称不是占位符的节点不会被改名；需要重新命名时先手动改回
   `client_xxx` 形式，或使用 `admin:nameClients` 指定 UUID（该接口同样只处理占位符名称）。
+
+## 6. 本分支的一键自更新默认关闭
+
+本分支包含上游没有的功能，而一键更新器的下载地址与前端展示的版本/哈希都沿用上游
+`nuomiiiii/Lite`：管理员误点一次「立即更新」就会用上游二进制覆盖本分支。
+
+因此本分支做了两处收敛：
+
+| 行为 | 说明 |
+| --- | --- |
+| 默认不支持一键更新 | `admin:getSelfUpdateStatus` 返回 `supported=false`、`reason=self_update_disabled_in_this_fork`，在下载/校验/替换之前就拦截；后台入口会显示为不可用 |
+| 默认只从本 fork 拉取 | `releaseBaseURL` 指向 `luckyf1oat/Lite` 的 releases，而非上游 |
+
+需要恢复自更新时：
+
+```bash
+# 1) 让 fork 拥有自己的 release 资产（Lite-linux-amd64 与 lite-update.json）
+# 2) 在服务单元中显式开启
+systemctl edit lite      # 追加：
+#   [Service]
+#   Environment=LITE_SELF_UPDATE_ENABLED=1
+# 可选：指向自定义资产地址
+#   Environment=LITE_UPDATE_BASE_URL=https://github.com/<owner>/<repo>/releases/download
+systemctl daemon-reload && systemctl restart lite
+```
+
+未设置 `LITE_SELF_UPDATE_ENABLED=1` 时，即使直接调用 `admin:startSelfUpdate` 也会被拒绝。
+
+## 7. 与 Komari 共存
+
+同一台机器上同时运行 Komari 与 Lite 不会互相覆盖数据，前提是两者各自使用独立的数据目录：
+
+| | Komari | Lite |
+| --- | --- | --- |
+| 数据目录 | `/root/data`（容器内 `/app/data`） | `/opt/lite/data` |
+| 主库 | `komari.db` | `lite.db` |
+| 端口 | 25774 | 27777 |
+
+需要注意：
+
+- **不要复用 Komari 的数据卷给 Lite Docker 部署**。两者容器内路径都是 `/app/data`，
+  `theme/`、`backup/` 子目录同名会互相覆盖。用 systemd 安装（本文档方式）不受影响。
+- Lite 的 Dockerfile 保留了 `/app/komari -> Lite` 兼容软链，仅影响容器内命令兼容，不影响宿主机。
+- 同一台被管机器只能有一个 agent 指向一个后端；要同时上报需部署两个 agent 实例。
+
