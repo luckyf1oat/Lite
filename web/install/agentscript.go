@@ -28,7 +28,11 @@ func AgentScript(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	c.Header("Cache-Control", "no-store")
+	// The installer evolves together with the server. A stale copy served from
+	// an edge cache would silently deploy an old script, so forbid caching.
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
 	c.Data(http.StatusOK, "text/x-shellscript; charset=utf-8", []byte(agentScript))
 }
 

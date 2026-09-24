@@ -15,10 +15,12 @@ ENDPOINT=""
 ENROLL_KEY=""
 INTERVAL=""
 AGENT_DIR="/opt/lite-agent"
+SERVICE_NAME="lite-agent"
 CONFIG_PATH=""
 GHPROXY=""
 INSTALL_URL="https://raw.githubusercontent.com/nuomiiiii/Lite-agent/main/install.sh"
 INSTALL_VERSION=""
+TAKE_OVER_LEGACY="0"
 
 log_info() { printf '%s\n' "$*"; }
 log_err() { printf '%s\n' "$*" >&2; }
@@ -34,12 +36,27 @@ Options:
   -k, --enroll-key KEY   Enrollment key issued by the panel (required)
   -i, --interval SEC     Report interval in seconds (default 600)
       --dir PATH         Agent install directory (default /opt/lite-agent)
+      --service-name NAME  systemd service base name (default lite-agent)
       --config PATH      Agent config file path (default <dir>/config.json)
+      --take-over-legacy Retire an existing komari-agent on this host
+                         (only correct when MIGRATING Komari to Lite; by default
+                          the two agents coexist and never touch each other)
       --install-ghproxy URL  GitHub proxy for the official installer
       --install-version VER  Pin the agent version
 USAGE
 }
 
+# ---------------------------------------------------------------------------
+# 与 Komari 共存：默认使用独立的服务名与安装目录。
+#
+# 官方 install.sh 只要收到 --install-service-name 或 --install-dir 就会置
+# custom_layout=true，从而：
+#   * 不执行 retire_legacy_service（不会停用/删除 komari-agent）
+#   * 不复制 komari 的 sidecar 身份文件（node.json / auto-discovery.json 等）
+#   * 不继承旧服务的启动参数
+# 这正是"两套探针互不干扰"所需的语义。需要真正接管旧 Komari 时必须显式
+# 传 --take-over-legacy，避免误伤。
+# ---------------------------------------------------------------------------
 while [ $# -gt 0 ]; do
     case "$1" in
         -e|--endpoint) ENDPOINT="${2:-}"; shift 2 ;;
@@ -49,7 +66,9 @@ while [ $# -gt 0 ]; do
         -i|--interval) INTERVAL="${2:-}"; shift 2 ;;
         --interval=*) INTERVAL="${1#--interval=}"; shift ;;
         --dir) AGENT_DIR="${2:-}"; shift 2 ;;
+        --service-name) SERVICE_NAME="${2:-}"; shift 2 ;;
         --config) CONFIG_PATH="${2:-}"; shift 2 ;;
+        --take-over-legacy) TAKE_OVER_LEGACY="1"; shift ;;
         --install-ghproxy) GHPROXY="${2:-}"; shift 2 ;;
         --install-version) INSTALL_VERSION="${2:-}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -80,6 +99,30 @@ fi
 
 if [ -z "$CONFIG_PATH" ]; then
     CONFIG_PATH="$AGENT_DIR/config.json"
+fi
+
+# 检测本机是否已有 Komari 探针：默认共存，明确告知用户不会被改动。
+detect_legacy_agent() {
+    if command -v systemctl >/dev/null 2>&1 && systemctl cat komari-agent.service >/dev/null 2>&1; then
+        return 0
+    fi
+    if [ -f /etc/init.d/komari-agent ] || [ -f /etc/init/komari-agent.conf ]; then
+        return 0
+    fi
+    if [ -x /opt/komari/agent ] || [ -x /usr/local/komari/agent ]; then
+        return 0
+    fi
+    return 1
+}
+
+if detect_legacy_agent; then
+    if [ "$TAKE_OVER_LEGACY" = "1" ]; then
+        log_info "检测到本机已有 Komari 探针，且已指定 --take-over-legacy：安装后将移除它。"
+    else
+        log_info "检测到本机已有 Komari 探针：本次安装使用独立目录与服务名，"
+        log_info "  Komari 的服务、配置与身份文件都不会被改动。"
+        log_info "  若你确实是要把 Komari 迁移到 Lite，请改用 migrate.sh 或加 --take-over-legacy。"
+    fi
 fi
 
 # 依赖：curl 与 tar/python 皆为可选，优先 curl
@@ -203,6 +246,12 @@ if [ ! -s "$INSTALLER" ]; then
 fi
 
 set -- --config "$CONFIG_PATH" --enable-remote-control
+if [ "$TAKE_OVER_LEGACY" = "1" ]; then
+    log_info "      --take-over-legacy 已指定：将接管并移除本机 komari-agent"
+else
+    # 共存模式：显式给出服务名与目录，让官方脚本置 custom_layout=true。
+    set -- "$@" --install-service-name "$SERVICE_NAME" --install-dir "$AGENT_DIR"
+fi
 if [ -n "$GHPROXY" ]; then
     set -- "$@" --install-ghproxy "$GHPROXY"
 fi
@@ -222,6 +271,8 @@ fi
 log_info "[4/4] 完成"
 log_info "      节点 UUID : ${NODE_UUID:-unknown}"
 log_info "      配置      : $CONFIG_PATH"
+log_info "      服务名    : $SERVICE_NAME"
+log_info "      安装目录  : $AGENT_DIR"
 log_info "      采集间隔  : ${INTERVAL}s"
 log_info "      远程控制  : 已开启"
 log_info "      稍后打开面板，该节点名称会自动变为「国家代码-IP-ASN-ISP」"
