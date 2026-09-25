@@ -44,6 +44,10 @@ const (
 	enrollRateMaxEntries = 4096
 	// enrollDefaultMaxPerHour applies when the setting is absent.
 	enrollDefaultMaxPerHour = 60
+	// enrollHostnameMaxLen bounds the hostname recorded at enrollment. It is far
+	// below clients.name's varchar(100) because the auto-namer later appends
+	// "国家代码-IP-ASN-ISP" to this placeholder.
+	enrollHostnameMaxLen = 64
 )
 
 var (
@@ -140,8 +144,11 @@ func Enroll(c *gin.Context) {
 		respondEnrollError(c, http.StatusBadRequest, errEnrollBadRequest)
 		return
 	}
-	if len(request.Hostname) > 128 {
-		request.Hostname = request.Hostname[:128]
+	// Truncated well below the column limit: the auto-namer later appends
+	// "国家代码-IP-ASN-ISP" to this placeholder, and a long IPv6 address can
+	// otherwise overflow varchar(100) and break the panel layout.
+	if len(request.Hostname) > enrollHostnameMaxLen {
+		request.Hostname = request.Hostname[:enrollHostnameMaxLen]
 	}
 
 	now := time.Now().UTC()

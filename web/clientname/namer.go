@@ -347,6 +347,11 @@ func (n *Namer) resolveAndRename(job lookupJob) {
 	if name == "" {
 		return
 	}
+	// Defence in depth: Describe already bounds the length, but a future change
+	// there must not be able to overflow clients.name (varchar(100)).
+	if len(name) > exitinfo.MaxNameLength {
+		name = name[:exitinfo.MaxNameLength]
+	}
 	if err := ApplyGeneratedName(job.uuid, name); err != nil {
 		logger.Warnf("clientname", "failed to rename node %s: %v", job.uuid, err)
 		return

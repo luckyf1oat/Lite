@@ -262,23 +262,78 @@ func (r *Resolver) fetch(ctx context.Context, ip string) (Info, error) {
 	return info, nil
 }
 
+// MaxNameLength bounds a generated node name. It is deliberately below the
+// clients.name column width (varchar(100)) and the panel's display width: a
+// full IPv6 address plus country, ASN and ISP can reach ~80 characters on its
+// own, which overflows the column and breaks the node list layout.
+const MaxNameLength = 60
+
 // Describe renders the standard node name: country code, IP, ASN and ISP.
 // Missing pieces are omitted so a partial answer still produces a stable name.
+// IPv6 addresses are abridged and long operator names dropped as needed so the
+// result always fits MaxNameLength.
 func Describe(ip string, info Info) string {
-	parts := make([]string, 0, 4)
-	if code := normalizeCountryCode(info.CountryCode); code != "" {
-		parts = append(parts, code)
+	address := firstNonEmpty(info.IP, ip)
+	code := normalizeCountryCode(info.CountryCode)
+	asn := asnToken(info.ASN)
+	isp := sanitizeSegment(info.ISP)
+
+	// Progressive fallbacks, longest first: the first variant that fits wins, so
+	// an IPv4 node keeps every part while a long IPv6 name degrades gracefully.
+	candidates := [][]string{
+		{code, address, asn, isp},
+		{code, address, asn},
+		{code, shortenAddress(address), asn, isp},
+		{code, shortenAddress(address), asn},
+		{shortenAddress(address)},
 	}
-	if address := firstNonEmpty(info.IP, ip); address != "" {
-		parts = append(parts, address)
+	for _, parts := range candidates {
+		if name := joinParts(parts); name != "" && len(name) <= MaxNameLength {
+			return name
+		}
 	}
-	if asn := normalizeASN(info.ASN); asn != "" {
-		parts = append(parts, "AS"+asn)
+	// Pathological input: hard-truncate the shortest meaningful form.
+	name := joinParts([]string{code, shortenAddress(address)})
+	if name == "" {
+		name = address
 	}
-	if isp := sanitizeSegment(info.ISP); isp != "" {
-		parts = append(parts, isp)
+	if len(name) > MaxNameLength {
+		name = name[:MaxNameLength]
 	}
-	return strings.Join(parts, "-")
+	return name
+}
+
+func joinParts(parts []string) string {
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			kept = append(kept, trimmed)
+		}
+	}
+	return strings.Join(kept, "-")
+}
+
+func asnToken(raw string) string {
+	asn := normalizeASN(raw)
+	if asn == "" {
+		return ""
+	}
+	return "AS" + asn
+}
+
+// shortenAddress abridges an IPv6 address to "head…tail" so the node name stays
+// readable. IPv4 addresses are returned unchanged.
+func shortenAddress(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" || !strings.Contains(address, ":") {
+		return address
+	}
+	const keepHead, keepTail = 4, 2
+	groups := strings.Split(address, ":")
+	if len(groups) <= keepHead+keepTail {
+		return address
+	}
+	return strings.Join(groups[:keepHead], ":") + "…" + strings.Join(groups[len(groups)-keepTail:], ":")
 }
 
 // sanitizeSegment trims a name fragment and collapses whitespace so the

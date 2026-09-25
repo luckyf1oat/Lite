@@ -21,6 +21,9 @@ GHPROXY=""
 INSTALL_URL="https://raw.githubusercontent.com/nuomiiiii/Lite-agent/main/install.sh"
 INSTALL_VERSION=""
 TAKE_OVER_LEGACY="0"
+USE_DOCKER=""
+AGENT_IMAGE="ghcr.io/nuomiiiii/lite-agent:latest"
+CONTAINER_NAME="lite-agent"
 
 log_info() { printf '%s\n' "$*"; }
 log_err() { printf '%s\n' "$*" >&2; }
@@ -41,6 +44,14 @@ Options:
       --take-over-legacy Retire an existing komari-agent on this host
                          (only correct when MIGRATING Komari to Lite; by default
                           the two agents coexist and never touch each other)
+      --docker           Run the agent as a container instead of a host service.
+                         This is the only mode that is fully isolated from a
+                         host's komari-agent: the vendor agent retires the
+                         legacy komari service on startup and offers no switch
+                         to disable that, so on a host that must keep Komari,
+                         use --docker.
+      --docker-auto      Same as --docker, but auto-selected. Used internally
+                         when a komari install is detected and Docker is present.
       --install-ghproxy URL  GitHub proxy for the official installer
       --install-version VER  Pin the agent version
 USAGE
@@ -69,6 +80,8 @@ while [ $# -gt 0 ]; do
         --service-name) SERVICE_NAME="${2:-}"; shift 2 ;;
         --config) CONFIG_PATH="${2:-}"; shift 2 ;;
         --take-over-legacy) TAKE_OVER_LEGACY="1"; shift ;;
+        --docker) USE_DOCKER="1"; shift ;;
+        --docker-auto) USE_DOCKER="auto"; shift ;;
         --install-ghproxy) GHPROXY="${2:-}"; shift 2 ;;
         --install-version) INSTALL_VERSION="${2:-}"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -115,13 +128,30 @@ detect_legacy_agent() {
     return 1
 }
 
-if detect_legacy_agent; then
-    if [ "$TAKE_OVER_LEGACY" = "1" ]; then
-        log_info "检测到本机已有 Komari 探针，且已指定 --take-over-legacy：安装后将移除它。"
+docker_available() {
+    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1
+}
+
+# 官方 agent 二进制的 relocate 逻辑会在启动后停用并删除本机的
+# komari-agent.service，且没有任何开关可以关掉它（详见 upstream
+# relocate.retireLeftoverLegacy）。因此"宿主上保留 Komari"只能靠容器隔离：
+# 容器内看不到宿主机的 systemd，夺舍无处下手。
+if detect_legacy_agent && [ "$TAKE_OVER_LEGACY" != "1" ]; then
+    if [ "$USE_DOCKER" = "1" ]; then
+        log_info "检测到本机已有 Komari 探针；已指定 --docker，将以容器方式运行。"
+    elif docker_available; then
+        USE_DOCKER="auto"
+        log_info "检测到本机已有 Komari 探针：自动改用容器方式运行，避免影响 Komari。"
+        log_info "  （官方 agent 会主动接管宿主上的 komari-agent，容器是唯一可靠的隔离方式）"
     else
-        log_info "检测到本机已有 Komari 探针：本次安装使用独立目录与服务名，"
-        log_info "  Komari 的服务、配置与身份文件都不会被改动。"
-        log_info "  若你确实是要把 Komari 迁移到 Lite，请改用 migrate.sh 或加 --take-over-legacy。"
+        log_err "检测到本机已有 Komari 探针，但本机没有可用的 Docker。"
+        log_err "在这种机器上以宿主服务方式安装 Lite 探针，会停用并删除 komari-agent。"
+        log_err ""
+        log_err "请三选一："
+        log_err "  1) 安装 Docker 后重跑本指令（会自动改用容器隔离）"
+        log_err "  2) 若只是要给这台机器加 Lite 探针且不迁移 Komari —— 仍需 Docker"
+        log_err "  3) 若确实要把 Komari 迁移到 Lite，改用 migrate.sh，或显式加 --take-over-legacy"
+        exit 1
     fi
 fi
 
@@ -226,43 +256,71 @@ JSON
 chmod 600 "$CONFIG_PATH"
 
 # ---------------------------------------------------------------------------
-# 3) 调用官方安装脚本（带 --config，服务单元会复用该参数）
+# 3) 安装：容器模式 或 官方 install.sh
 # ---------------------------------------------------------------------------
-log_info "[3/4] 安装 agent（官方 install.sh）"
-INSTALLER="$(mktemp)"
-trap 'rm -f "$INSTALLER"' EXIT
-
-DOWNLOAD_URL="$INSTALL_URL"
-if [ -n "$GHPROXY" ]; then
-    DOWNLOAD_URL="${GHPROXY%/}/$INSTALL_URL"
-fi
-if ! curl -fsSL -m 60 -o "$INSTALLER" "$DOWNLOAD_URL"; then
-    log_err "下载 install.sh 失败: $DOWNLOAD_URL"
-    exit 1
-fi
-if [ ! -s "$INSTALLER" ]; then
-    log_err "下载到的 install.sh 为空"
-    exit 1
-fi
-
-set -- --config "$CONFIG_PATH" --enable-remote-control
-if [ "$TAKE_OVER_LEGACY" = "1" ]; then
-    log_info "      --take-over-legacy 已指定：将接管并移除本机 komari-agent"
+if [ -n "$USE_DOCKER" ]; then
+    log_info "[3/4] 以容器方式启动探针"
+    if ! docker_available; then
+        log_err "--docker 已指定，但本机 docker 不可用"
+        exit 1
+    fi
+    # 容器内看不到宿主机的 systemd，因此官方 agent 的
+    # relocate.retireLeftoverLegacy 无法停用/删除 komari-agent。
+    docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+    if ! docker pull "$AGENT_IMAGE" >/dev/null 2>&1; then
+        log_err "拉取镜像失败: $AGENT_IMAGE"
+        exit 1
+    fi
+    docker run -d \
+        --name "$CONTAINER_NAME" \
+        --restart=always \
+        -v "$CONFIG_PATH:/app/config.json:ro" \
+        "$AGENT_IMAGE" --config /app/config.json --enable-remote-control >/dev/null
+    sleep 8
+    if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null)" != "true" ]; then
+        log_err "容器未保持运行，最近日志："
+        docker logs "$CONTAINER_NAME" 2>&1 | tail -15 >&2
+        exit 1
+    fi
+    RUNTIME_DESC="容器 $CONTAINER_NAME（镜像 $AGENT_IMAGE）"
 else
-    # 共存模式：显式给出服务名与目录，让官方脚本置 custom_layout=true。
-    set -- "$@" --install-service-name "$SERVICE_NAME" --install-dir "$AGENT_DIR"
-fi
-if [ -n "$GHPROXY" ]; then
-    set -- "$@" --install-ghproxy "$GHPROXY"
-fi
-if [ -n "$INSTALL_VERSION" ]; then
-    set -- "$@" --install-version "$INSTALL_VERSION"
-fi
+    log_info "[3/4] 安装 agent（官方 install.sh）"
+    INSTALLER="$(mktemp)"
+    trap 'rm -f "$INSTALLER"' EXIT
 
-if command -v bash >/dev/null 2>&1; then
-    bash "$INSTALLER" "$@"
-else
-    sh "$INSTALLER" "$@"
+    DOWNLOAD_URL="$INSTALL_URL"
+    if [ -n "$GHPROXY" ]; then
+        DOWNLOAD_URL="${GHPROXY%/}/$INSTALL_URL"
+    fi
+    if ! curl -fsSL -m 60 -o "$INSTALLER" "$DOWNLOAD_URL"; then
+        log_err "下载 install.sh 失败: $DOWNLOAD_URL"
+        exit 1
+    fi
+    if [ ! -s "$INSTALLER" ]; then
+        log_err "下载到的 install.sh 为空"
+        exit 1
+    fi
+
+    set -- --config "$CONFIG_PATH" --enable-remote-control
+    if [ "$TAKE_OVER_LEGACY" = "1" ]; then
+        log_info "      --take-over-legacy 已指定：将接管并移除本机 komari-agent"
+    else
+        # 独立命名空间：显式给出服务名与目录，使官方脚本 custom_layout=true。
+        set -- "$@" --install-service-name "$SERVICE_NAME" --install-dir "$AGENT_DIR"
+    fi
+    if [ -n "$GHPROXY" ]; then
+        set -- "$@" --install-ghproxy "$GHPROXY"
+    fi
+    if [ -n "$INSTALL_VERSION" ]; then
+        set -- "$@" --install-version "$INSTALL_VERSION"
+    fi
+
+    if command -v bash >/dev/null 2>&1; then
+        bash "$INSTALLER" "$@"
+    else
+        sh "$INSTALLER" "$@"
+    fi
+    RUNTIME_DESC="宿主服务 $SERVICE_NAME（目录 $AGENT_DIR）"
 fi
 
 # ---------------------------------------------------------------------------
@@ -271,8 +329,10 @@ fi
 log_info "[4/4] 完成"
 log_info "      节点 UUID : ${NODE_UUID:-unknown}"
 log_info "      配置      : $CONFIG_PATH"
-log_info "      服务名    : $SERVICE_NAME"
-log_info "      安装目录  : $AGENT_DIR"
+log_info "      运行方式  : $RUNTIME_DESC"
 log_info "      采集间隔  : ${INTERVAL}s"
 log_info "      远程控制  : 已开启"
 log_info "      稍后打开面板，该节点名称会自动变为「国家代码-IP-ASN-ISP」"
+if [ -n "$USE_DOCKER" ]; then
+    log_info "      管理命令  : docker logs $CONTAINER_NAME  |  docker restart $CONTAINER_NAME"
+fi

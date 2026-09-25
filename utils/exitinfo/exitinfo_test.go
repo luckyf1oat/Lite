@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -142,6 +143,47 @@ func TestDescribeOmitsMissingParts(t *testing.T) {
 				t.Fatalf("describe = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestDescribeBoundsLength(t *testing.T) {
+	// A full IPv6 address plus every other part must not overflow the node name.
+	info := Info{CountryCode: "US", ASN: "4837", ISP: "China Unicom Backbone International"}
+	name := Describe("2607:9d00:2000:0105::a088:9e36", info)
+	if len(name) > MaxNameLength {
+		t.Fatalf("name length = %d, want <= %d (%q)", len(name), MaxNameLength, name)
+	}
+	if !strings.Contains(name, "US") || !strings.Contains(name, "AS4837") {
+		t.Fatalf("a degraded name must still identify the node: %q", name)
+	}
+
+	// IPv4 names keep every part because they fit comfortably.
+	if v4 := Describe("203.0.113.7", Info{CountryCode: "CN", ASN: "AS4837", ISP: "China Unicom"}); v4 != "CN-203.0.113.7-AS4837-China Unicom" {
+		t.Fatalf("ipv4 name = %q", v4)
+	}
+
+	// Pathological input still returns something within bounds.
+	huge := Describe("2001:db8:1:2:3:4:5:6", Info{
+		CountryCode: "DE",
+		ASN:         "3320",
+		ISP:         strings.Repeat("VeryLongOperatorName ", 8),
+	})
+	if len(huge) > MaxNameLength {
+		t.Fatalf("pathological name length = %d, want <= %d", len(huge), MaxNameLength)
+	}
+}
+
+func TestShortenAddress(t *testing.T) {
+	tests := map[string]string{
+		"203.0.113.7":                    "203.0.113.7",
+		"2607:9d00:2000:0105::a088:9e36": "2607:9d00:2000:0105…a088:9e36",
+		"2001:db8::1":                    "2001:db8::1",
+		"":                               "",
+	}
+	for input, want := range tests {
+		if got := shortenAddress(input); got != want {
+			t.Fatalf("shortenAddress(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 
