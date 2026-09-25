@@ -38,8 +38,23 @@ func TestEnrollmentKeyActiveCoversRevokedExpiredAndExhausted(t *testing.T) {
 	if !unlimited.Active(now) {
 		t.Fatal("MaxUses == 0 means unlimited and must stay active")
 	}
-}
 
+	// A zero ExpiresAt means "never expires": it must stay active indefinitely
+	// and only go inactive once revoked.
+	forever := models.EnrollmentKey{MaxUses: 5}
+	if !forever.Active(now) {
+		t.Fatal("a key without an expiry must be active")
+	}
+	if !forever.Active(now.Add(100 * 365 * 24 * time.Hour)) {
+		t.Fatal("a key without an expiry must still be active far in the future")
+	}
+	revokedForever := forever
+	revokedForeverAt := now.Add(-time.Minute)
+	revokedForever.RevokedAt = &revokedForeverAt
+	if revokedForever.Active(now) {
+		t.Fatal("revocation must still apply to a key without an expiry")
+	}
+}
 func TestEnrollCIDRAllows(t *testing.T) {
 	tests := []struct {
 		name      string

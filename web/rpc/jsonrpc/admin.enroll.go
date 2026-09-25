@@ -54,13 +54,15 @@ func init() {
 }
 
 type enrollmentKeyView struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Prefix       string     `json:"prefix"`
-	MaxUses      int        `json:"max_uses"`
-	UsedCount    int        `json:"used_count"`
-	AllowedCIDRs string     `json:"allowed_cidrs"`
-	ExpiresAt    time.Time  `json:"expires_at"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Prefix       string `json:"prefix"`
+	MaxUses      int    `json:"max_uses"`
+	UsedCount    int    `json:"used_count"`
+	AllowedCIDRs string `json:"allowed_cidrs"`
+	// ExpiresAt 为 null 表示永不失效（与 NeverExpires 冗余，便于前端直接判断）。
+	ExpiresAt    *time.Time `json:"expires_at"`
+	NeverExpires bool       `json:"never_expires"`
 	RevokedAt    *time.Time `json:"revoked_at"`
 	CreatedAt    time.Time  `json:"created_at"`
 	Active       bool       `json:"active"`
@@ -69,18 +71,25 @@ type enrollmentKeyView struct {
 }
 
 func viewEnrollmentKey(key models.EnrollmentKey, now time.Time) enrollmentKeyView {
-	return enrollmentKeyView{
+	view := enrollmentKeyView{
 		ID:           key.ID,
 		Name:         key.Name,
 		Prefix:       key.Prefix,
 		MaxUses:      key.MaxUses,
 		UsedCount:    key.UsedCount,
 		AllowedCIDRs: key.AllowedCIDRs,
-		ExpiresAt:    key.ExpiresAt,
+		NeverExpires: key.ExpiresAt.IsZero(),
 		RevokedAt:    key.RevokedAt,
 		CreatedAt:    key.CreatedAt,
 		Active:       key.Active(now),
 	}
+	// Never emit the zero time: the panel and any API client should see an
+	// explicit null rather than 0001-01-01.
+	if !key.ExpiresAt.IsZero() {
+		expires := key.ExpiresAt
+		view.ExpiresAt = &expires
+	}
+	return view
 }
 
 func adminCreateEnrollmentKey(ctx context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
@@ -96,12 +105,17 @@ func adminCreateEnrollmentKey(ctx context.Context, req *rpc.JsonRpcRequest) (any
 		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid request body: "+err.Error(), nil)
 	}
 
+	// expires_in_hours semantics:
+	//   - omitted / negative -> use the default (7 days)
+	//   - 0                 -> never expires
+	//   - positive          -> that many hours, capped at one year
 	hours := params.ExpiresHours
-	if hours <= 0 {
+	neverExpires := hours == 0
+	if hours < 0 {
 		hours = enrollKeyDefaultHours
 	}
-	if hours > enrollKeyMaxHours {
-		return nil, rpc.MakeError(rpc.InvalidParams, "expires_in_hours must be at most 8760 (1 year)", nil)
+	if !neverExpires && hours > enrollKeyMaxHours {
+		return nil, rpc.MakeError(rpc.InvalidParams, "expires_in_hours must be at most 8760 (1 year); use 0 for no expiry", nil)
 	}
 	uses := params.MaxUses
 	if uses <= 0 {
@@ -127,10 +141,12 @@ func adminCreateEnrollmentKey(ctx context.Context, req *rpc.JsonRpcRequest) (any
 		Prefix:       plain[:8],
 		MaxUses:      uses,
 		AllowedCIDRs: allowed,
-		ExpiresAt:    now.Add(time.Duration(hours) * time.Hour),
 		CreatedBy:    actor,
 		CreatedAt:    now,
 		UpdatedAt:    now,
+	}
+	if !neverExpires {
+		key.ExpiresAt = now.Add(time.Duration(hours) * time.Hour)
 	}
 	if err := dbcore.GetDBInstance().Create(&key).Error; err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to issue enrollment key: "+err.Error(), nil)

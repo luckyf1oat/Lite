@@ -29,6 +29,7 @@ type EnrollmentKey struct {
 func (EnrollmentKey) TableName() string { return "enrollment_keys" }
 
 // Active reports whether the key may still be used at the given time.
+// A zero ExpiresAt means the key never expires and stays usable until revoked.
 func (k EnrollmentKey) Active(now time.Time) bool {
 	if k.RevokedAt != nil {
 		return false
